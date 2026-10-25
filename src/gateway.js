@@ -1,8 +1,11 @@
 import { createServer } from 'node:http';
 import { resolve } from 'node:path';
 import { randomBytes } from 'node:crypto';
+import { readFile } from 'node:fs/promises';
 import { WeChatTextClient } from './wechat.js';
+import { TelegramTextClient } from './telegram.js';
 import { GatewayCore } from './gateway-core.js';
+import { deliverToChats } from './chat-delivery.js';
 import { bridgeToken, equalSecret, readJson, saveJson } from './common.js';
 
 const dataDir = resolve(process.env.BRIDGE_DATA || 'data');
@@ -18,23 +21,40 @@ const contextFile = resolve(dataDir, 'wechat-context.json');
 const state = await readJson(stateFile, { ownerId: null });
 const savedContext = await readJson(contextFile, { token: null });
 const workerNames = await readJson(resolve(dataDir, 'computer-names.json'), {});
+let telegramToken = process.env.TELEGRAM_BOT_TOKEN?.trim();
+if (!telegramToken) {
+  try { telegramToken = (await readFile(resolve(dataDir, 'telegram-token.txt'), 'utf8')).trim(); }
+  catch (error) { if (error.code !== 'ENOENT') throw error; }
+}
+if (telegramToken && !/^\d+:[A-Za-z0-9_-]+$/.test(telegramToken)) throw new Error('Invalid Telegram bot token');
 const client = new WeChatTextClient({ credentialFile, cursorFile: syncFile, onMessage: (msg) => core.incoming(msg) });
+const telegram = telegramToken ? new TelegramTextClient({
+  token: telegramToken, cursorFile: resolve(dataDir, 'telegram-offset.txt'), onMessage: (msg) => core.incoming(msg)
+}) : null;
 await client.login();
 
 const pairCode = randomBytes(6).toString('hex').toUpperCase();
+const telegramPairCode = telegram && !state.telegramOwnerId ? randomBytes(6).toString('hex').toUpperCase() : null;
 if (!state.ownerId) console.log(`From your WeChat, send: /绑定 ${pairCode}`);
+if (telegramPairCode) console.log(`From a private chat with your Telegram bot, send: /bind ${telegramPairCode}`);
 const core = new GatewayCore({
   ownerId: state.ownerId,
+  telegramOwnerId: state.telegramOwnerId || null,
   initialContext: savedContext.token,
   saveContext: async (context) => saveJson(contextFile, { token: context }),
   workerNames,
   pairCode,
-  saveOwner: async (ownerId) => saveJson(stateFile, { ownerId }),
+  telegramPairCode,
+  saveOwner: async (ownerId) => saveJson(stateFile, { ownerId, telegramOwnerId: core.telegramOwnerId }),
+  saveTelegramOwner: async (telegramOwnerId) => saveJson(stateFile, { ownerId: core.ownerId, telegramOwnerId }),
   send: async (message) => {
-    if (!core.ownerId) return;
-    for (let i = 0; i < message.length; i += 1200) {
-      await client.sendText(core.ownerId, message.slice(i, i + 1200), core.currentContext || undefined);
-    }
+    const senders = [];
+    if (core.ownerId) senders.push(async (text) => {
+      for (let i = 0; i < text.length; i += 1200)
+        await client.sendText(core.ownerId, text.slice(i, i + 1200), core.currentContext || undefined);
+    });
+    if (telegram && core.telegramOwnerId) senders.push((text) => telegram.sendText(core.telegramOwnerId, text));
+    await deliverToChats(message, senders);
   }
 });
 
@@ -94,4 +114,4 @@ const server = createServer(async (request, response) => {
 });
 
 server.listen(port, host, () => console.log(`Gateway listening on ${host}:${port}`));
-await client.start();
+await Promise.all([client.start(), ...(telegram ? [telegram.start()] : [])]);

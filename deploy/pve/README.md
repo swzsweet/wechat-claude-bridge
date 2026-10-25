@@ -2,6 +2,21 @@
 
 网关直接作为 PVE 宿主机上的 systemd 服务运行；Windows 电脑只运行 worker。PVE 需要能访问 GitHub、nodejs.org 和 npm registry。端口 8765 只向两台 worker 所在的私有网络开放，不要映射到公网。
 
+## 可选：接入 Telegram Bot
+
+先在 Telegram 的 BotFather 创建 Bot。不要把 Bot Token 发到聊天或提交到 GitHub。在 PVE Web Shell 中以 root 运行以下命令，按提示输入 Token（输入不会回显）：
+
+```sh
+read -r -s -p 'Telegram Bot Token: ' bot_token; printf '\n'
+install -o wechatbridge -g wechatbridge -m 0600 /dev/null /var/lib/wechat-claude-bridge/telegram-token.txt
+printf '%s' "$bot_token" > /var/lib/wechat-claude-bridge/telegram-token.txt
+unset bot_token
+systemctl restart wechat-claude-gateway.service
+journalctl -u wechat-claude-gateway.service -n 30 --no-pager
+```
+
+日志会显示 `/bind` 加一次性绑定码。在 Telegram 中与该 Bot **私聊**并发送这条命令。绑定成功后，微信和 Telegram 会同时收到任务回复和审批请求；任一端都能发任务、切换项目或批准/拒绝，先提交的审批决定生效。Bot Token、Telegram 绑定 ID 和轮询位置保存在 `/var/lib/wechat-claude-bridge/`，不会上传到 GitHub。Telegram Bot 不应同时被其他程序以 `getUpdates` 轮询；如果此前配置过 webhook，需先从旧系统移除 webhook。
+
 ## 首次安装
 
 在 PVE Web Shell 中以 root 执行。命令从本仓库的 `main` 拉取代码，在 `/opt/wechat-claude-bridge/releases/` 建立版本目录，在 `/var/lib/wechat-claude-bridge/` 保留数据。首次没有微信状态文件时只安装服务，不启动网关。

@@ -1,12 +1,16 @@
 import { code, describeRequest, parseCommand } from './common.js';
 
 export class GatewayCore {
-  constructor({ send, saveOwner, saveContext = async () => {}, ownerId = null, pairCode, ttlMs = 300000, workerNames = {}, initialContext = null }) {
+  constructor({ send, saveOwner, saveTelegramOwner = async () => {}, saveContext = async () => {}, ownerId = null,
+    telegramOwnerId = null, pairCode, telegramPairCode = null, ttlMs = 300000, workerNames = {}, initialContext = null }) {
     this.send = send;
     this.saveOwner = saveOwner;
+    this.saveTelegramOwner = saveTelegramOwner;
     this.saveContext = saveContext;
     this.ownerId = ownerId;
+    this.telegramOwnerId = telegramOwnerId;
     this.pairCode = pairCode;
+    this.telegramPairCode = telegramPairCode;
     this.ttlMs = ttlMs;
     this.workerNames = workerNames;
     this.route = 'a';
@@ -25,25 +29,39 @@ export class GatewayCore {
   }
 
   async incoming(msg) {
+    const channel = msg.channel || 'wechat';
+    if (channel !== 'wechat' && channel !== 'telegram') return;
     const from = msg.from_user_id;
     const text = msg.text?.trim();
     if (!from || !text) return;
-    const dedupe = msg.message_id;
+    const dedupe = msg.message_id && `${channel}:${msg.message_id}`;
     if (dedupe && this.seen.has(dedupe)) return;
     if (dedupe) {
       this.seen.add(dedupe);
       if (this.seen.size > 1000) this.seen.delete(this.seen.values().next().value);
     }
-    if (!this.ownerId) {
-      if (text !== `/绑定 ${this.pairCode}`) return;
-      this.ownerId = from;
-      await this.saveOwner(from);
+    if (channel === 'telegram') {
+      if (!this.telegramOwnerId) {
+        if (!this.telegramPairCode ||
+            (text !== `/绑定 ${this.telegramPairCode}` && text !== `/bind ${this.telegramPairCode}`)) return;
+        this.telegramOwnerId = from;
+        await this.saveTelegramOwner(from);
+        await this.send('Telegram 绑定成功。微信和 Telegram 现在共用任务、回复和审批。');
+        return;
+      }
+      if (from !== this.telegramOwnerId) return;
+    } else {
+      if (!this.ownerId) {
+        if (text !== `/绑定 ${this.pairCode}`) return;
+        this.ownerId = from;
+        await this.saveOwner(from);
+        await this.updateContext(msg.context_token);
+        await this.send('绑定成功。发送 /a 或 /b 选择电脑，/status 查看连接。');
+        return;
+      }
+      if (from !== this.ownerId) return;
       await this.updateContext(msg.context_token);
-      await this.send('绑定成功。发送 /a 或 /b 选择电脑，/status 查看连接。');
-      return;
     }
-    if (from !== this.ownerId) return;
-    await this.updateContext(msg.context_token);
     let command = parseCommand(text);
     if (command.type === 'route') {
       this.route = command.worker;
@@ -54,7 +72,7 @@ export class GatewayCore {
       const pending = this.pending.get(command.id);
       if (!pending) { await this.send('审批编号不存在或已过期。'); return; }
       if (pending.expires <= Date.now()) {
-        if (pending.kind === 'local') this.cancelLocalApproval(command.id, '微信审批超时，操作已拒绝');
+        if (pending.kind === 'local') this.cancelLocalApproval(command.id, '远程审批超时，操作已拒绝');
         else this.pending.delete(command.id);
         await this.send('审批已过期，操作未执行。');
         return;
@@ -154,7 +172,7 @@ export class GatewayCore {
 
   async requestApproval(worker, tool, input) {
     const detail = describeRequest(tool, input);
-    if (!detail) return { error: 'Operation too large to review in WeChat' };
+    if (!detail) return { error: 'Operation too large to review in chat' };
     let id = code();
     while (this.pending.has(id)) id = code();
     this.pending.set(id, { worker, tool, input, expires: Date.now() + this.ttlMs });
@@ -166,13 +184,13 @@ export class GatewayCore {
 
   async requestLocalApproval(worker, tool, input, session = '') {
     const detail = describeRequest(tool, input);
-    if (!detail) return { error: 'Operation too large to review in WeChat' };
+    if (!detail) return { error: 'Operation too large to review in chat' };
     let id = code();
     while (this.pending.has(id)) id = code();
     let resolveDecision;
     const decision = new Promise((resolve) => { resolveDecision = resolve; });
     const timer = setTimeout(() => {
-      this.cancelLocalApproval(id, '微信审批超时，操作已拒绝');
+      this.cancelLocalApproval(id, '远程审批超时，操作已拒绝');
     }, this.ttlMs);
     this.pending.set(id, {
       kind: 'local', worker, tool, expires: Date.now() + this.ttlMs,
@@ -182,7 +200,7 @@ export class GatewayCore {
     try {
       await this.send(`${label} 请求 ${id}\n${detail}\n\n批准 ${id} / 拒绝 ${id}`);
     } catch (error) {
-      this.cancelLocalApproval(id, '微信发送失败');
+      this.cancelLocalApproval(id, '消息发送失败');
       throw error;
     }
     return { id, decision };

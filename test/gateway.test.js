@@ -66,7 +66,7 @@ test('VS Code approval rejects answers and handles deny, expiry, and cancellatio
   const second = await core.requestLocalApproval('a', 'Bash', { command: 'pwd' });
   core.pending.get(second.id).expires = Date.now() - 1;
   await core.incoming({ from_user_id: 'owner', text: `批准 ${second.id}` });
-  assert.deepEqual(await second.decision, { allow: false, reason: '微信审批超时，操作已拒绝' });
+  assert.deepEqual(await second.decision, { allow: false, reason: '远程审批超时，操作已拒绝' });
 
   const third = await core.requestLocalApproval('a', 'Bash', { command: 'pwd' });
   assert.equal(core.cancelLocalApproval(third.id), true);
@@ -110,6 +110,42 @@ test('only the bound owner updates the saved WeChat context', async () => {
   await core.incoming({ from_user_id: 'owner', text: '/status', context_token: 'current' });
   assert.equal(core.currentContext, 'current');
   assert.deepEqual(contexts, ['current']);
+});
+
+test('Telegram binding shares tasks and first approval decision with WeChat', async () => {
+  const sent = [];
+  const saved = [];
+  const core = new GatewayCore({ ownerId: 'wechat-owner', pairCode: 'WECHAT', telegramPairCode: 'TELEGRAM',
+    saveOwner: async () => {}, saveTelegramOwner: async (id) => saved.push(id),
+    send: async (text) => sent.push(text) });
+  const telegram = (from, text, message_id) => core.incoming({
+    channel: 'telegram', from_user_id: from, text, message_id
+  });
+
+  await telegram('stranger', '/bind WRONG', '1');
+  assert.equal(core.telegramOwnerId, null);
+  await telegram('tg-owner', '/bind TELEGRAM', '2');
+  assert.deepEqual(saved, ['tg-owner']);
+  await telegram('stranger', '/b delete files', '3');
+  assert.equal(core.queues.b.length, 0);
+  await telegram('tg-owner', '/b inspect files', '4');
+  assert.deepEqual(await core.next('b', false), { type: 'task', prompt: 'inspect files' });
+  await core.incoming({ from_user_id: 'wechat-owner', text: '/status', message_id: '4' });
+  assert.match(sent.at(-1), /当前：电脑 B/);
+
+  const { id, decision } = await core.requestLocalApproval('b', 'Bash', { command: 'pwd' });
+  await telegram('tg-owner', `批准 ${id}`, '5');
+  assert.deepEqual(await decision, { allow: true });
+  await core.incoming({ from_user_id: 'wechat-owner', text: `拒绝 ${id}` });
+  assert.match(sent.at(-1), /不存在或已过期/);
+
+  const workerApproval = await core.requestApproval('b', 'Write', { file_path: 'note.txt', content: 'ok' });
+  await core.incoming({ from_user_id: 'wechat-owner', text: `拒绝 ${workerApproval.id}` });
+  assert.deepEqual(await core.next('b', true), {
+    type: 'decision', id: workerApproval.id, allow: false, answer: undefined
+  });
+  await telegram('tg-owner', `批准 ${workerApproval.id}`, '6');
+  assert.match(sent.at(-1), /不存在或已过期/);
 });
 
 test('project commands are routed to the selected computer', async () => {
