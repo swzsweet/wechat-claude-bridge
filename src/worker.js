@@ -1,8 +1,9 @@
 import { isAbsolute, resolve } from 'node:path';
 import { homedir } from 'node:os';
 import { query } from '@anthropic-ai/claude-agent-sdk';
-import { bridgeToken, readJson, saveJson, sleep } from './common.js';
+import { bridgeToken, parseCommand, readJson, saveJson, sleep } from './common.js';
 import { createProject, findProject, importProjects, parseProjectList, prepareRoot, projectPath, validName } from './projects.js';
+import { workerPermissionOptions } from './permission-mode.js';
 
 const id = process.env.WORKER_ID?.toLowerCase();
 const gateway = process.env.GATEWAY_URL?.replace(/\/$/, '');
@@ -77,16 +78,21 @@ async function run(prompt) {
     if (!name || !state.projects[name]) throw new Error('先发送 /new-project 名称 创建项目，或 /project 名称 切换项目');
     const project = state.projects[name];
     const cwd = await projectPath(root, project.path, isAbsolute(project.path));
+    const mode = project.permissionMode === 'auto' ? 'auto' : 'manual';
     const options = {
       cwd,
       env: { ...process.env, WECHAT_BRIDGE_WORKER: '1' },
-      permissionMode: 'default',
-      canUseTool: approve,
-      hooks: { PreToolUse: [{ matcher: 'Bash|Write|Edit|MultiEdit|NotebookEdit', hooks: [requireRemoteApproval], timeout: 310 }] },
+      ...workerPermissionOptions(mode, approve, requireRemoteApproval),
       settingSources: ['user', 'project', 'local']
     };
     if (project.sessionId) options.resume = project.sessionId;
     for await (const message of query({ prompt, options })) {
+      if (mode === 'auto' && message.type === 'system' && message.subtype === 'init' &&
+          typeof message.permissionMode === 'string' && message.permissionMode !== 'auto') {
+        project.permissionMode = 'manual';
+        await saveJson(data, state);
+        throw new Error('自动模式在当前 Claude Code/API 配置下不可用，已恢复手动模式；请重新发送任务');
+      }
       if (message.session_id && message.session_id !== project.sessionId) {
         project.sessionId = message.session_id;
         await saveJson(data, state);
@@ -97,15 +103,36 @@ async function run(prompt) {
     }
     await api('/result', { text: `[${name}] ${answer || 'Completed without text output'}` });
   } catch (error) {
+    if (state.projects[name]?.permissionMode === 'auto' &&
+        /auto mode|classifier|permission mode|not available|unsupported/i.test(error.message)) {
+      state.projects[name].permissionMode = 'manual';
+      await saveJson(data, state).catch(console.error);
+    }
     console.error('Task:', error);
     await api('/result', { text: `[${name || '未选择'}] 任务失败：${error.message}` }).catch(console.error);
   } finally { busy = false; }
 }
 
+async function autoCommand(event) {
+  const name = state.active;
+  if (!name || !state.projects[name]) {
+    await api('/result', { text: '请先选择项目，再设置自动模式。' });
+    return;
+  }
+  const project = state.projects[name];
+  if (event.action === 'on' || event.action === 'off') {
+    project.permissionMode = event.action === 'on' ? 'auto' : 'manual';
+    await saveJson(data, state);
+  }
+  const enabled = project.permissionMode === 'auto';
+  await api('/result', { text: `[${name}] 自动模式${enabled ? '已开启' : '已关闭'}。${enabled ? '无法判断的工具调用仍会请求微信审批；下一条任务生效。' : '需要权限的工具会按手动模式请求审批。'}` });
+}
+
 async function projectCommand(event) {
   try {
     if (event.action === 'list') {
-      const names = Object.entries(state.projects).map(([name, entry]) => `${name === state.active ? '* ' : '  '}${name} -> ${entry.path}`);
+      const names = Object.entries(state.projects).map(([name, entry]) =>
+        `${name === state.active ? '* ' : '  '}${name}${entry.permissionMode === 'auto' ? ' [自动]' : ''} -> ${entry.path}`);
       await api('/result', { text: `项目根目录：${root}\n${names.join('\n') || '尚无项目'}` });
       return;
     }
@@ -165,11 +192,17 @@ while (true) {
       }
     } else if (event.type === 'project') {
       await projectCommand(event);
+    } else if (event.type === 'auto') {
+      await autoCommand(event);
     } else if (event.type === 'task') {
       if (!busy) {
-        const selected = findProject(state.projects, event.prompt);
-        if (selected) await projectCommand({ action: 'select', name: selected });
-        else void run(event.prompt);
+        const command = parseCommand(event.prompt);
+        if (command.type === 'auto') await autoCommand(command);
+        else {
+          const selected = findProject(state.projects, event.prompt);
+          if (selected) await projectCommand({ action: 'select', name: selected });
+          else void run(event.prompt);
+        }
       }
     }
   } catch (error) {

@@ -45,6 +45,13 @@ export function parseCommand(text) {
   if (answer) return { type: 'answer', id: answer[2].toUpperCase(), answer: answer[3].trim() };
   const route = value.match(/^\/(a|b)(?:\s+([\s\S]+))?$/i);
   if (route) return { type: 'route', worker: route[1].toLowerCase(), prompt: route[2]?.trim() || '' };
+  const auto = value.match(/^\/auto(?:\s+(on|off|status))?$/i)
+    || value.match(/^自动模式(?:\s*(开启|关闭|状态))?$/u);
+  if (auto) return {
+    type: 'auto',
+    action: ['on', '开启'].includes(auto[1]?.toLowerCase()) ? 'on'
+      : ['off', '关闭'].includes(auto[1]?.toLowerCase()) ? 'off' : 'status'
+  };
   if (value === '/status') return { type: 'status' };
   if (value === '/new') return { type: 'new' };
   if (value === '/projects' || value === '项目列表' || value === '有哪些项目') return { type: 'project', action: 'list' };

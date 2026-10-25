@@ -84,6 +84,11 @@ export class GatewayCore {
       await this.send(`当前：${this.label(this.route)}。${this.label('a')} ${state('a')}，${this.label('b')} ${state('b')}。`);
       return;
     }
+    if (command.type === 'auto') {
+      this.enqueue(this.route, command);
+      await this.send(`已发送自动模式命令到${this.label(this.route)}。`);
+      return;
+    }
     let worker = this.route;
     if (this.awaitingProjects && command.type === 'prompt' && this.awaitingProjects.expires > Date.now()) {
       if (command.prompt === '取消' || command.prompt === '/cancel') {

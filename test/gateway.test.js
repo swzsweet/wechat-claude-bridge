@@ -122,6 +122,16 @@ test('project commands are routed to the selected computer', async () => {
   assert.deepEqual(await core.next('b', false), { type: 'project', action: 'select', name: 'demo' });
 });
 
+test('auto mode commands route to the selected worker', async () => {
+  const { core } = fixture();
+  await core.incoming({ from_user_id: 'owner', text: '/b /auto on' });
+  assert.deepEqual(await core.next('b', false), { type: 'auto', action: 'on' });
+  await core.incoming({ from_user_id: 'owner', text: '/auto' });
+  assert.deepEqual(await core.next('b', false), { type: 'auto', action: 'status' });
+  await core.incoming({ from_user_id: 'owner', text: '自动模式 关闭' });
+  assert.deepEqual(await core.next('b', false), { type: 'auto', action: 'off' });
+});
+
 test('two-step bulk registration uses the selected worker and preserves the list', async () => {
   const { core, sent } = fixture();
   await core.incoming({ from_user_id: 'owner', text: '/b 登记项目' });
