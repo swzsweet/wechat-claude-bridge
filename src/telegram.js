@@ -15,6 +15,7 @@ export const telegramCommands = [
   { command: 'retry', description: '重试任务，后面填写编号' },
   { command: 'plan', description: '先制定计划，后面填写需求' },
   { command: 'file', description: '发送项目文件，后面填写相对路径' },
+  { command: 'export', description: '导出计划或结果为 Word 等格式' },
   { command: 'project', description: '切换项目，后面填写项目名' },
   { command: 'new_project', description: '新建项目，后面填写项目名' },
   { command: 'import_project', description: '登记已有项目，后面填写名称和路径' },
@@ -81,7 +82,7 @@ export function telegramMessage(update) {
 
 export function telegramActionCallback(update) {
   const query = update.callback_query;
-  if (!/^(?:task:(?:cancel|retry):[A-F0-9]{8}|project:[A-F0-9]{8}|plan:(?:approve|revise|discard):[A-F0-9]{8})$/.test(query?.data || '') ||
+  if (!/^(?:task:(?:cancel|retry):[A-F0-9]{8}|project:[A-F0-9]{8}|plan:(?:approve|revise|discard|export):[A-F0-9]{8})$/.test(query?.data || '') ||
       query.message?.chat?.type !== 'private' || query.from?.id !== query.message.chat.id ||
       !Number.isInteger(query.message.message_id)) return null;
   return { channel: 'telegram', from_user_id: String(query.from.id), message_id: String(update.update_id),

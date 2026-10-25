@@ -45,6 +45,10 @@ export function parseCommand(text) {
   if (planAction) return { type: 'plan-action', action: planAction[1].slice(5).toLowerCase(), id: planAction[2].toUpperCase() };
   if (value === '/plan') return { type: 'usage', text: '请发送 /plan 需求内容。' };
   if (value === '/file') return { type: 'usage', text: '请发送 /file 项目内相对路径。' };
+  if (value === '/export') return { type: 'usage', text: '请发送 /export 任务编号 docx（也支持 md、txt）。' };
+  const exportFile = value.match(/^\/export\s+([A-F0-9]{8})(?:\s+(docx|md|txt))?$/i);
+  if (exportFile) return { type: 'export', id: exportFile[1].toUpperCase(), format: exportFile[2]?.toLowerCase() || 'docx' };
+  if (/^\/export(?:\s|$)/i.test(value)) return { type: 'usage', text: '请发送 /export 任务编号 docx（也支持 md、txt）。' };
   const file = value.match(/^\/file\s+(.+)$/i);
   if (file) return { type: 'file', path: file[1].trim() };
   const taskAction = value.match(/^\/(cancel|retry)\s+([A-F0-9]{8})$/i);

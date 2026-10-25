@@ -1,6 +1,7 @@
 import { code, describeRequest, parseCommand } from './common.js';
 import { TaskStore } from './task-store.js';
 import { formatTelegramNotification } from './telegram-format.js';
+import { createWordDocument, plainDocumentText } from './document-content.js';
 
 export class GatewayCore {
   constructor({ send, saveOwner, saveTelegramOwner = async () => {}, saveContext = async () => {}, ownerId = null,
@@ -118,7 +119,7 @@ export class GatewayCore {
       return command.allow === false ? '已拒绝。' : '已批准。';
     }
     if (command.type === 'help') {
-      await this.send('命令：/a、/b 切换电脑；/status 查看在线状态；/projects 查看项目；/project 项目名 切换项目；/tasks 查看任务；/cancel 编号 取消；/retry 编号 重试；/plan 需求 制定计划；/file 相对路径 发送项目文件；/new_project 项目名 新建项目；/import_project 项目名 完整路径 登记项目；/import_projects 批量登记；/new 新开会话；/auto on、/auto off。图片和文件可直接发送。');
+      await this.send('命令：/a、/b 切换电脑；/status 查看在线状态；/projects 查看项目；/project 项目名 切换项目；/tasks 查看任务；/cancel 编号 取消；/retry 编号 重试；/plan 需求 制定计划；/file 相对路径 发送项目文件；/export 编号 docx 导出计划或结果；/new_project 项目名 新建项目；/import_project 项目名 完整路径 登记项目；/import_projects 批量登记；/new 新开会话；/auto on、/auto off。图片和文件可直接发送。');
       return;
     }
     if (command.type === 'usage') { await this.send(command.text); return; }
@@ -136,6 +137,10 @@ export class GatewayCore {
     if (command.type === 'file') {
       this.enqueue(this.route, { type: 'file', path: command.path });
       await this.send(`已请${this.label(this.route)}发送文件。`);
+      return;
+    }
+    if (command.type === 'export') {
+      await this.send(await this.exportTask(command.id, command.format));
       return;
     }
     if (command.type === 'task-action') {
@@ -277,6 +282,7 @@ export class GatewayCore {
       return '已发送项目切换。';
     }
     if (kind !== 'plan') return '无效按钮。';
+    if (verb === 'export') return this.exportTask(id, 'docx');
     const task = this.tasks.get(id);
     if (!task || task.kind !== 'plan' || task.status !== 'review') return '计划已处理或过期。';
     if (verb === 'revise') {
@@ -318,10 +324,31 @@ export class GatewayCore {
       { text: '同意计划', callback_data: `plan:approve:${id}` },
       { text: '要求修改', callback_data: `plan:revise:${id}` },
       { text: '放弃', callback_data: `plan:discard:${id}` }
+    ], [
+      { text: '下载 Word', callback_data: `plan:export:${id}` }
     ]], replyToMessageId: task.replyToMessageId });
     if (this.sendFile) await this.sendFile(`${project}-${id}-plan.md`, Buffer.from(plan, 'utf8'), `计划 ${id}`)
       .catch((error) => console.error('Plan document:', error.message));
     return true;
+  }
+
+  async exportTask(id, format = 'docx') {
+    const task = this.tasks.get(id);
+    const content = task?.kind === 'plan' ? task.plan : task?.status === 'completed' ? task.result : null;
+    if (!content) return '该任务暂无可导出的计划或结果。';
+    if (!this.telegramOwnerId || !this.sendFile) return '文件导出需要先绑定 Telegram Bot。';
+    if (!['docx', 'md', 'txt'].includes(format)) return '只支持 docx、md、txt 导出。';
+    const project = String(task.project || 'project').replace(/[^\p{L}\p{N}._-]/gu, '_').slice(0, 50);
+    const name = `${project}-${id}-${task.kind === 'plan' ? 'plan' : 'result'}.${format}`;
+    try {
+      const bytes = format === 'docx' ? await createWordDocument(content)
+        : Buffer.from(format === 'txt' ? plainDocumentText(content) : content, 'utf8');
+      await this.sendFile(name, bytes, `任务 ${id} · ${format.toUpperCase()}`);
+      return `已发送 ${format.toUpperCase()} 文件到 Telegram。`;
+    } catch (error) {
+      console.error('Task export:', error.message);
+      return '导出失败，请稍后重试。';
+    }
   }
 
   async taskProgress(worker, id, stage, project = null) {
@@ -338,7 +365,8 @@ export class GatewayCore {
     if (!task || task.worker !== worker) return false;
     if (!['completed', 'failed', 'cancelled'].includes(status)) return false;
     if (task.delivered) return true;
-    await this.tasks.update(id, { status, stage: status === 'completed' ? '已完成' : status === 'cancelled' ? '已取消' : '失败' });
+    await this.tasks.update(id, { status, result: String(text || '').slice(0, 12000),
+      stage: status === 'completed' ? '已完成' : status === 'cancelled' ? '已取消' : '失败' });
     await this.send(`${this.label(worker)} 任务 ${id}：${this.tasks.get(id).stage}`, {
       progressTaskId: id, replyToMessageId: task.replyToMessageId });
     if (text) await this.result(worker, text, null, task.replyToMessageId);

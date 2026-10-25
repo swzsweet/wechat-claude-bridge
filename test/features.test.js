@@ -65,6 +65,37 @@ test('task finish records completion and sends final Markdown once', async () =>
   assert.equal(sent.filter((item) => item.options?.markdown).length, 1);
 });
 
+test('bound owner exports a plan as Word and a completed result as Markdown', async () => {
+  const files = [];
+  const sent = [];
+  const core = new GatewayCore({ ownerId: 'owner', telegramOwnerId: 'tg-owner',
+    send: async (text, options) => sent.push({ text, options }) });
+  core.sendFile = async (name, bytes) => files.push({ name, bytes });
+  const plan = await core.submitTask('a', '检查库存', { kind: 'plan' });
+  await core.next('a', false);
+  await core.planReady('a', plan.id, '# 库存计划\n\n- 核对库存', '仓储系统');
+  assert.match(files[0].name, /\.md$/);
+  assert.equal(sent.find((message) => message.options?.keyboard)?.options.keyboard[1][0].callback_data,
+    `plan:export:${plan.id}`);
+  assert.equal(await core.action({ action: `plan:export:${plan.id}` }), '已发送 DOCX 文件到 Telegram。');
+  await core.incoming({ channel: 'telegram', from_user_id: 'tg-owner',
+    text: `/export ${plan.id} docx` });
+  assert.match(files.at(-1).name, /\.docx$/);
+  assert.equal(files.at(-1).bytes.subarray(0, 2).toString(), 'PK');
+
+  const task = await core.submitTask('a', '运行检查');
+  await core.next('a', false);
+  await core.finishTask('a', task.id, 'completed', '# 检查完成\n\n**通过**');
+  await core.incoming({ channel: 'telegram', from_user_id: 'tg-owner',
+    text: `/export ${task.id} md` });
+  assert.match(files.at(-1).name, /\.md$/);
+  assert.match(files.at(-1).bytes.toString(), /\*\*通过\*\*/);
+  const count = files.length;
+  await core.incoming({ channel: 'telegram', from_user_id: 'other',
+    text: `/export ${task.id} docx` });
+  assert.equal(files.length, count);
+});
+
 test('Telegram action buttons require the exact private bot message', async () => {
   const client = new TelegramTextClient({ token: '123:test', cursorFile: 'unused', onMessage: async () => {},
     request: async () => ({ ok: true, json: async () => ({ ok: true, result: { message_id: 42 } }) }) });
@@ -78,6 +109,8 @@ test('Telegram action buttons require the exact private bot message', async () =
     from: { id: 999 } } }), null);
   assert.equal(telegramActionCallback({ ...update, callback_query: { ...update.callback_query,
     data: 'task:cancel:bad' } }), null);
+  assert.equal(telegramActionCallback({ ...update, callback_query: { ...update.callback_query,
+    data: 'plan:export:A1B2C3D4' } }).action, 'plan:export:A1B2C3D4');
 });
 
 test('Telegram photo and document are accepted only from the private owner chat', () => {
