@@ -1,0 +1,89 @@
+# 微信 ClawBot 与 Claude Code 本机桥接
+
+一份网关登录微信，两台 Windows 电脑分别运行 worker。网关只接收绑定账号的文字消息；Claude Code 的工具权限由微信上的一次性编号批准或拒绝。每台电脑可管理多个项目，每个项目保存独立的会话 ID，使用该电脑的 CC Switch 配置。
+
+## 前提
+
+- 两台电脑均安装 Node.js 20+、Claude Code、CC Switch；在**启动 worker 的同一 Windows 用户**下验证 `claude -p "只回复 OK"` 可通过第三方 API 返回结果。
+- 两台电脑需要能通过私有 IP 互相访问：同一局域网可直接使用 A 的局域网 IP；若已有 Tailscale 子网路由或站点到站点路由，也可使用路由可达的 IP。电脑本身不必重复安装 Tailscale。不要把网关端口映射到公网。
+- 本项目目录复制到两台电脑，在各自目录运行 `npm ci`。
+
+## 启动（PowerShell）
+
+在 A 上查看可用的局域网 IP（例如 `192.168.1.20`）；若通过已有 VPN 子网路由连接，则使用 B 可以访问到的 A 的 IP：
+
+```powershell
+ipconfig
+```
+
+在 A 的第一个 PowerShell 窗口启动网关（替换示例 IP）：
+
+```powershell
+$env:BRIDGE_HOST = '192.168.1.20'
+npm run gateway
+```
+
+首次启动会自动生成 32 字节密钥，保存在 `data/bridge-token.txt`；终端还会打印微信二维码。用微信扫码后，终端会打印 `/绑定` 命令；向 ClawBot 发送该命令以绑定你的微信账号。登录凭证存入 `data/wechat.json`。这两个文件都是秘密，不要分享整个 `data` 目录。微信文字收发直接实现腾讯公开的 iLink 协议字段，无额外微信 SDK 依赖。
+
+在 A 的第二个 PowerShell 窗口启动 worker A：
+
+```powershell
+$env:WORKER_ID = 'a'
+$env:GATEWAY_URL = 'http://192.168.1.20:8765'
+npm run worker
+```
+
+在 B 上启动 worker B，使用 B 可访问到的 A 的 IP，并将 A 上 `data/bridge-token.txt` 的内容安全地设置为环境变量：
+
+```powershell
+$env:BRIDGE_TOKEN = '<A 上 data/bridge-token.txt 的内容>'
+$env:WORKER_ID = 'b'
+$env:GATEWAY_URL = 'http://192.168.1.20:8765'
+npm run worker
+```
+
+网关启动后，在 B 上运行 `Test-NetConnection 192.168.1.20 -Port 8765`（替换为 A 的实际 IP）。`TcpTestSucceeded: True` 才表示网络可用。若失败，检查两台电脑是否在同一局域网或已有双向子网路由、A 的 `BRIDGE_HOST` 是否绑定正确 IP，以及 Windows 防火墙是否允许 TCP 8765 入站。仅在 A 所在局域网有一台 Tailscale 子网路由器，并不能让完全不在 tailnet 的远端 B 自动连入；这种情况还需要 B 侧的站点路由或客户端。网关、worker 所在电脑都必须保持开机运行。
+
+worker 默认使用 `C:\Users\<用户名>\Documents\ClaudeProjects` 作为项目根目录，首次启动自动创建 `default` 项目。若要改变位置，在启动 worker 前设置 `$env:PROJECTS_ROOT = 'D:\MyProjects'`。项目根目录选定后应保持不变，否则已登记项目的相对路径可能失效。新建或登记项目时无需重启 worker。
+
+## 微信命令
+
+| 命令 | 作用 |
+| --- | --- |
+| `/a`、`/b` | 切换默认电脑 |
+| `/a 任务内容`、`/b 任务内容` | 发送任务到指定电脑 |
+| 普通文字 | 发给当前电脑 |
+| `/status` | 查看 worker 是否在线 |
+| `/new` | 当前电脑下次任务新开会话 |
+| `/projects` | 列出当前电脑的项目和选中的项目 |
+| `/project 名称`、`切换到名称` | 切换到已登记的项目；单独发送项目名也可以 |
+| `/new-project 名称` | 在项目根目录新建并选择项目 |
+| `/import-project 名称 路径` | 登记已有项目，可使用完整路径或根目录内相对路径 |
+| `登记项目` | 进入批量登记，下一条消息粘贴项目清单 |
+| `/import-projects` 后接多行清单 | 在同一条消息中批量登记项目 |
+| `批准 ABCD1234`、`拒绝 ABCD1234` | 处理单次权限请求 |
+| `答 ABCD1234 1` | 回答单选问题，序号从 1 开始 |
+
+可在命令前加 `/a ` 或 `/b ` 指定电脑，例如 `/b 登记项目`。批量登记时每行写一个目录；目录名默认成为项目名，也可以明确指定名称：
+
+```text
+登记项目
+网站 = C:\Work\client-site
+数据分析 = D:\Projects\analytics
+E:\code\notes
+```
+
+如果先发送 `登记项目`，下一条消息只需粘贴清单。worker 会检查目录是否存在，逐项报告成功、重复或失败；批量登记不会改变当前项目。之后发送 `切换到网站` 或单独发送 `网站` 即可切换，每个项目保留自己的 Claude 会话。项目名支持中文、字母、数字、空格、点、下划线和连字符；同名项目不会覆盖原登记。完整路径可位于项目根目录之外，但必须是该电脑上已存在且当前 Windows 用户可访问的文件夹。`/new-project` 仍只在预设根目录下新建目录。
+
+审批 5 分钟后超时拒绝。审批消息会显示工具名称和完整输入；输入超过 8000 字符时拒绝远程审批。Bash、Write、Edit、MultiEdit 和 NotebookEdit 工具在执行前固定要求微信确认，包括本地规则原本自动允许的操作；其他工具仍按 Claude Code 权限规则处理。
+
+## 范围与限制
+
+- A、B 以及各项目有独立的 Claude Code 会话历史。桥接 worker 的项目清单及会话 ID 存在本机 `data/worker-a.json` 或 `data/worker-b.json`。要续接 VS Code 的已有会话，可先关闭 VS Code 中该会话，在 worker 首次启动前设置 `$env:INITIAL_SESSION_ID = '<会话 ID>'`；这只应用到 `default` 项目，目录和 Windows 用户必须与原会话一致。不要让 VS Code 和 worker 同时操作同一段会话。
+- 当前版本仅收发微信文字。网页登录按钮、Windows UAC、验证码等系统或网页 UI 授权不在 Claude 工具权限回调中。
+- 微信 iLink 协议字段来自腾讯公开的 OpenClaw 微信插件文档。扫码和消息收发要在真实微信环境验证；微信服务端协议变化可能需要更新 `src/wechat.js`。
+- 网关排队的任务和待审批请求保存在内存，网关重启后未执行任务会丢失，进行中的审批会在 worker 超时后拒绝。生产长期运行还应增加持久化任务队列和进程守护。
+
+## 本地检查
+
+`npm test` 检查绑定账号、电脑路由、审批一次性使用和待审批期间的消息顺序。
