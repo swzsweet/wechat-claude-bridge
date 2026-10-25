@@ -108,9 +108,28 @@ test('Claude Markdown uses Telegram rich messages and falls back if rejected', a
   rejectRich = true;
   await client.sendMarkdown('123', markdown);
   assert.deepEqual(calls.slice(2).map(({ method }) => method), ['sendRichMessage', 'sendMessage']);
-  assert.equal(calls.at(-1).data.text, markdown);
+  assert.equal(calls.at(-1).data.parse_mode, 'HTML');
+  assert.match(calls.at(-1).data.text, /<b>Plan<\/b>/);
+  assert.match(calls.at(-1).data.text, /<b>Important<\/b>/);
   await client.sendMarkdown('123', '## 结果\n\n**完成**', '结果：完成');
-  assert.equal(calls.at(-1).data.text, '结果：完成');
+  assert.match(calls.at(-1).data.text, /<b>结果<\/b>/);
+});
+
+test('Telegram falls back to plain text if rich and HTML both fail', async () => {
+  const calls = [];
+  const client = new TelegramTextClient({ token: '123:example', cursorFile: 'unused', onMessage: async () => {},
+    request: async (url, options) => {
+      const method = url.split('/').at(-1);
+      const data = JSON.parse(options.body);
+      calls.push({ method, data });
+      if (method === 'sendRichMessage' || data.parse_mode === 'HTML')
+        return { ok: false, status: 400, json: async () => ({ ok: false, description: 'unsupported' }) };
+      return { ok: true, json: async () => ({ ok: true, result: { message_id: 43 } }) };
+    } });
+  assert.deepEqual(await client.sendMarkdown('123', '**结果**', '结果'), [43]);
+  assert.deepEqual(calls.map(({ method }) => method), ['sendRichMessage', 'sendMessage', 'sendMessage']);
+  assert.equal(calls.at(-1).data.text, '结果');
+  assert.equal(calls.at(-1).data.parse_mode, undefined);
 });
 
 test('Telegram approval buttons belong to a private message from the bot', async () => {

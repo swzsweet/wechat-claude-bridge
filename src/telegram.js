@@ -2,6 +2,7 @@ import { readFile, writeFile, mkdir } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { sleep } from './common.js';
 import { normalSizeHeadings } from './telegram-format.js';
+import { telegramHtml } from './telegram-html.js';
 
 export const validTelegramToken = (token) => /^\d+:[A-Za-z0-9_-]+$/.test(token);
 
@@ -182,6 +183,15 @@ export class TelegramTextClient {
       return message?.message_id ? [message.message_id] : [];
     } catch (error) {
       console.error('Telegram Markdown:', error.message);
+      if (Array.from(markdown).length <= 3500) {
+        try {
+          const data = { chat_id: chatId, text: telegramHtml(markdown), parse_mode: 'HTML' };
+          const reply = replyParameters(replyToMessageId);
+          if (reply) data.reply_parameters = reply;
+          const message = await this.call('sendMessage', data);
+          return message?.message_id ? [message.message_id] : [];
+        } catch (htmlError) { console.error('Telegram HTML:', htmlError.message); }
+      }
       return this.sendText(chatId, fallbackText, { replyToMessageId });
     }
   }
