@@ -40,6 +40,17 @@ export function equalSecret(expected, actual) {
 export function parseCommand(text) {
   const value = text.trim();
   if (value === '/help' || value === '/start') return { type: 'help' };
+  if (value === '/tasks') return { type: 'tasks' };
+  const planAction = value.match(/^\/(plan_approve|plan_revise|plan_discard)\s+([A-F0-9]{8})$/i);
+  if (planAction) return { type: 'plan-action', action: planAction[1].slice(5).toLowerCase(), id: planAction[2].toUpperCase() };
+  if (value === '/plan') return { type: 'usage', text: '请发送 /plan 需求内容。' };
+  if (value === '/file') return { type: 'usage', text: '请发送 /file 项目内相对路径。' };
+  const file = value.match(/^\/file\s+(.+)$/i);
+  if (file) return { type: 'file', path: file[1].trim() };
+  const taskAction = value.match(/^\/(cancel|retry)\s+([A-F0-9]{8})$/i);
+  if (taskAction) return { type: 'task-action', action: taskAction[1].toLowerCase(), id: taskAction[2].toUpperCase() };
+  const plan = value.match(/^\/plan\s+([\s\S]+)$/i);
+  if (plan) return { type: 'plan', prompt: plan[1].trim() };
   const decision = value.match(/^(?:\/)?(批准|拒绝|approve|deny)\s+([A-F0-9]{8})$/i);
   if (decision) return { type: 'decision', allow: /^(批准|approve)$/i.test(decision[1]), id: decision[2].toUpperCase() };
   const answer = value.match(/^(?:\/)?(回答|答|answer)\s+([A-F0-9]{8})\s+(.+)$/i);

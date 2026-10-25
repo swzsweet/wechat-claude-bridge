@@ -1,7 +1,7 @@
 import { createServer } from 'node:http';
-import { resolve } from 'node:path';
+import { resolve, basename } from 'node:path';
 import { randomBytes } from 'node:crypto';
-import { readFile } from 'node:fs/promises';
+import { readFile, writeFile, mkdir } from 'node:fs/promises';
 import { WeChatTextClient } from './wechat.js';
 import { TelegramTextClient, validTelegramToken } from './telegram.js';
 import { GatewayCore } from './gateway-core.js';
@@ -19,6 +19,7 @@ const credentialFile = resolve(dataDir, 'wechat.json');
 const syncFile = resolve(dataDir, 'sync.txt');
 const contextFile = resolve(dataDir, 'wechat-context.json');
 const state = await readJson(stateFile, { ownerId: null });
+const savedTasks = await readJson(resolve(dataDir, 'tasks.json'), []);
 const savedContext = await readJson(contextFile, { token: null });
 const workerNames = await readJson(resolve(dataDir, 'computer-names.json'), {});
 let telegramToken = process.env.TELEGRAM_BOT_TOKEN?.trim();
@@ -36,8 +37,9 @@ const telegram = telegramToken ? new TelegramTextClient({
   getOwnerId: () => core.telegramOwnerId,
   onCallback: (callback) => {
     if (callback.from_user_id !== core.telegramOwnerId) return '无权操作。';
-    if (!telegram.ownsApprovalMessage(callback)) return '审批已处理或过期。';
-    return core.incoming(callback);
+    if (callback.approval_id) return telegram.ownsApprovalMessage(callback)
+      ? core.incoming(callback) : '审批已处理或过期。';
+    return telegram.ownsActionMessage(callback) ? core.action(callback) : '按钮已过期。';
   }
 }) : null;
 
@@ -49,6 +51,8 @@ const core = new GatewayCore({
   ownerId: state.ownerId,
   telegramOwnerId: state.telegramOwnerId || null,
   initialContext: savedContext.token,
+  initialTasks: savedTasks,
+  saveTasks: async (tasks) => saveJson(resolve(dataDir, 'tasks.json'), tasks),
   saveContext: async (context) => saveJson(contextFile, { token: context }),
   workerNames,
   pairCode,
@@ -56,29 +60,45 @@ const core = new GatewayCore({
   saveOwner: async (ownerId) => saveJson(stateFile, { ownerId, telegramOwnerId: core.telegramOwnerId }),
   saveTelegramOwner: async (telegramOwnerId) => saveJson(stateFile, { ownerId: core.ownerId, telegramOwnerId }),
   onApprovalSettled: async (id) => telegram?.clearApproval(id),
-  send: async (message, { approvalId, markdown } = {}) => {
+  send: async (message, { approvalId, markdown, progressTaskId, keyboard } = {}) => {
     const senders = [];
     if (core.ownerId) senders.push(async (text) => {
       for (let i = 0; i < text.length; i += 1200)
         await client.sendText(core.ownerId, text.slice(i, i + 1200), core.currentContext || undefined);
     });
-    if (telegram && core.telegramOwnerId) senders.push((text) => markdown
-      ? telegram.sendMarkdown(core.telegramOwnerId, text)
-      : telegram.sendText(core.telegramOwnerId, text, { approvalId }));
+    if (telegram && core.telegramOwnerId) senders.push((text) => progressTaskId
+      ? telegram.sendProgress(core.telegramOwnerId, progressTaskId, text)
+      : markdown ? telegram.sendMarkdown(core.telegramOwnerId, text)
+        : telegram.sendText(core.telegramOwnerId, text, { approvalId, keyboard }));
     await deliverToChats(message, senders);
   }
 });
+core.receiveMedia = async (media, worker) => {
+  if (!telegram || !media.fileId || !['image', 'document'].includes(media.type) || media.size > 10 * 1024 * 1024)
+    throw new Error('仅支持 10 MB 以内的图片或文件');
+  const bytes = await telegram.download(media.fileId);
+  const id = randomBytes(12).toString('hex');
+  const dir = resolve(dataDir, 'media');
+  await mkdir(dir, { recursive: true, mode: 0o700 });
+  await writeFile(resolve(dir, id), bytes, { mode: 0o600 });
+  return { id, type: media.type, name: basename(media.name || 'attachment').replace(/[^\p{L}\p{N}._ -]/gu, '_').slice(0, 100), worker };
+};
+core.sendFile = async (name, bytes, caption) => {
+  if (!telegram || !core.telegramOwnerId) return;
+  await telegram.sendDocument(core.telegramOwnerId, name, bytes, caption);
+};
+await core.tasks.persist();
 
 function json(response, status, body) {
   response.writeHead(status, { 'content-type': 'application/json; charset=utf-8' });
   response.end(JSON.stringify(body));
 }
 
-async function body(request) {
+async function body(request, limit = 20000) {
   let content = '';
   for await (const chunk of request) {
     content += chunk;
-    if (content.length > 20000) throw new Error('Body too large');
+    if (content.length > limit) throw new Error('Body too large');
   }
   return content ? JSON.parse(content) : {};
 }
@@ -90,8 +110,37 @@ const server = createServer(async (request, response) => {
   try {
     const url = new URL(request.url, `http://${host}:${port}`);
     if (request.method === 'GET' && url.pathname === '/next') return json(response, 200, { event: await core.next(worker, url.searchParams.get('busy') === '1') });
+    if (request.method === 'GET' && url.pathname === '/media') {
+      const task = core.tasks.get(url.searchParams.get('task'));
+      if (!task || task.worker !== worker || !task.media || task.media.id !== url.searchParams.get('id'))
+        return json(response, 404, { error: 'Media not found' });
+      const bytes = await readFile(resolve(dataDir, 'media', task.media.id));
+      return json(response, 200, { name: task.media.name, type: task.media.type, data: bytes.toString('base64') });
+    }
     if (request.method !== 'POST') return json(response, 404, { error: 'Unknown endpoint' });
-    const data = await body(request);
+    const data = await body(request, url.pathname === '/file-result' ? 15 * 1024 * 1024 :
+      url.pathname === '/plan-ready' ? 40000 : 20000);
+    if (url.pathname === '/projects') {
+      if (!Array.isArray(data.names) || data.names.length > 100 || data.names.some((name) => typeof name !== 'string' || name.length > 100))
+        return json(response, 400, { error: 'Invalid projects' });
+      await core.projects(worker, data.names, data.active);
+      return json(response, 200, { ok: true });
+    }
+    if (url.pathname === '/plan-ready') {
+      if (typeof data.id !== 'string' || typeof data.plan !== 'string' || data.plan.length > 30000 || typeof data.project !== 'string')
+        return json(response, 400, { error: 'Invalid plan' });
+      const ok = await core.planReady(worker, data.id, data.plan, data.project);
+      return json(response, ok ? 200 : 404, { ok });
+    }
+    if (url.pathname === '/file-result') {
+      if (!telegram || !core.telegramOwnerId || typeof data.data !== 'string' || data.data.length > 14 * 1024 * 1024 ||
+          typeof data.name !== 'string' || !/^[^\\/\r\n]{1,100}$/.test(data.name))
+        return json(response, 400, { error: 'Invalid file' });
+      const bytes = Buffer.from(data.data, 'base64');
+      if (bytes.length > 10 * 1024 * 1024) return json(response, 413, { error: 'File too large' });
+      await core.sendFile(data.name, bytes, `${core.label(worker)}：${data.name}`);
+      return json(response, 200, { ok: true });
+    }
     if (url.pathname === '/approval') {
       if (typeof data.tool !== 'string' || !data.input || typeof data.input !== 'object') return json(response, 400, { error: 'Invalid approval' });
       return json(response, 200, await core.requestApproval(worker, data.tool, data.input));
@@ -116,6 +165,17 @@ const server = createServer(async (request, response) => {
       if (typeof data.text !== 'string') return json(response, 400, { error: 'Invalid result' });
       await core.result(worker, data.text.slice(0, 12000));
       return json(response, 200, { ok: true });
+    }
+    if (url.pathname === '/task-progress') {
+      if (typeof data.id !== 'string' || typeof data.stage !== 'string') return json(response, 400, { error: 'Invalid progress' });
+      const ok = await core.taskProgress(worker, data.id, data.stage, typeof data.project === 'string' ? data.project : null);
+      return json(response, ok ? 200 : 404, { ok });
+    }
+    if (url.pathname === '/task-finish') {
+      if (typeof data.id !== 'string' || typeof data.status !== 'string' || typeof data.text !== 'string')
+        return json(response, 400, { error: 'Invalid finish' });
+      const ok = await core.finishTask(worker, data.id, data.status, data.text.slice(0, 12000));
+      return json(response, ok ? 200 : 404, { ok });
     }
     return json(response, 404, { error: 'Unknown endpoint' });
   } catch (error) {

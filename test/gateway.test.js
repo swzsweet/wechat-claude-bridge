@@ -27,7 +27,7 @@ test('only bound owner can route work and approve', async () => {
 
 test('busy worker receives decision before queued task', async () => {
   const { core } = fixture();
-  core.enqueue('a', { type: 'task', prompt: 'second' });
+  await core.submitTask('a', 'second');
   const { id } = await core.requestApproval('a', 'Write', { file_path: 'a.txt', content: 'hello' });
   await core.incoming({ from_user_id: 'owner', text: `拒绝 ${id}` });
   assert.equal((await core.next('a', true)).type, 'decision');
@@ -136,7 +136,7 @@ test('Telegram binding shares tasks and first approval decision with WeChat', as
   await telegram('stranger', '/b delete files', '3');
   assert.equal(core.queues.b.length, 0);
   await telegram('tg-owner', '/b inspect files', '4');
-  assert.deepEqual(await core.next('b', false), { type: 'task', prompt: 'inspect files' });
+  assert.match((await core.next('b', false)).id, /^[A-F0-9]{8}$/);
   await core.incoming({ from_user_id: 'wechat-owner', text: '/status', message_id: '4' });
   assert.match(sent.at(-1), /当前：电脑 B/);
 
