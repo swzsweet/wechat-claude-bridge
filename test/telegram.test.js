@@ -20,6 +20,25 @@ test('Telegram accepts only text from the sender in a private chat', () => {
   assert.equal(telegramMessage({ ...update, message: { ...update.message, text: undefined } }), null);
 });
 
+test('Telegram replies carry selected text or rich-message content as bounded context', () => {
+  const base = { update_id: 18, message: { message_id: 80, from: { id: 123 },
+    chat: { id: 123, type: 'private' }, text: '继续处理',
+    reply_to_message: { message_id: 70, chat: { id: 123, type: 'private' }, text: '完整旧回复' },
+    quote: { text: '选中的片段' } } };
+  assert.equal(telegramMessage(base).telegram_message_id, 80);
+  assert.equal(telegramMessage(base).quote, '选中的片段');
+  const rich = { ...base, message: { ...base.message, quote: undefined,
+    reply_to_message: { message_id: 70, chat: { id: 123, type: 'private' },
+      rich_message: { blocks: [{ type: 'section_heading', text: { text: '检查结果' } },
+        { type: 'paragraph', text: { text: '测试通过' } }] } } } };
+  assert.equal(telegramMessage(rich).quote, '检查结果\n测试通过');
+  assert.equal(telegramMessage({ ...base, message: { ...base.message,
+    reply_to_message: { ...base.message.reply_to_message, chat: { id: 456 } } } }).quote, undefined);
+  assert.match(telegramMessage({ ...base, message: { ...base.message, quote: undefined,
+    reply_to_message: { ...base.message.reply_to_message, text: '很'.repeat(1900) } } }).quote,
+  /引用内容已截断/);
+});
+
 test('Telegram text is split below the sendMessage limit', async () => {
   const calls = [];
   const client = new TelegramTextClient({ token: '123:example', cursorFile: 'unused', onMessage: async () => {},
@@ -32,6 +51,28 @@ test('Telegram text is split below the sendMessage limit', async () => {
   assert.deepEqual(calls.map(({ data }) => data.text.length), [2000, 2000, 500]);
   assert.ok(calls.every(({ data }) => data.chat_id === '123'));
   assert.ok(calls.every(({ url }) => url.endsWith('/sendMessage')));
+});
+
+test('Telegram task messages reply to the originating private message', async () => {
+  const calls = [];
+  const client = new TelegramTextClient({ token: '123:example', cursorFile: 'unused', onMessage: async () => {},
+    request: async (url, options) => {
+      calls.push({ method: url.split('/').at(-1), data: JSON.parse(options.body) });
+      return { ok: true, json: async () => ({ ok: true, result: { message_id: 42 } }) };
+    }
+  });
+  await client.sendText('123', '排队中', { replyToMessageId: 80 });
+  await client.sendProgress('123', 'TASK1', '运行中', { replyToMessageId: 80 });
+  await client.sendProgress('123', 'TASK1', '完成', { replyToMessageId: 80 });
+  await client.sendMarkdown('123', '# 结果', '结果', { replyToMessageId: 80 });
+  assert.deepEqual(calls.slice(0, 2).map((call) => call.data.reply_parameters), [
+    { message_id: 80, allow_sending_without_reply: true },
+    { message_id: 80, allow_sending_without_reply: true }
+  ]);
+  assert.equal(calls[2].method, 'editMessageText');
+  assert.equal(calls[2].data.reply_parameters, undefined);
+  assert.deepEqual(calls[3].data.reply_parameters,
+    { message_id: 80, allow_sending_without_reply: true });
 });
 
 test('Claude Markdown uses Telegram rich messages and falls back if rejected', async () => {

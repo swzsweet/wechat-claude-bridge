@@ -23,6 +23,40 @@ export const telegramCommands = [
   { command: 'help', description: '查看命令说明' }
 ];
 
+function richText(value, depth = 0) {
+  if (depth > 8) return '';
+  if (typeof value === 'string') return value;
+  if (Array.isArray(value)) return value.map((part) => richText(part, depth + 1)).join('');
+  if (!value || typeof value !== 'object') return '';
+  return richText(value.text, depth + 1) ||
+    (typeof value.alternative_text === 'string' ? value.alternative_text : '');
+}
+
+function richBlocks(blocks, depth = 0) {
+  if (depth > 8 || !Array.isArray(blocks)) return '';
+  return blocks.map((block) => {
+    if (!block || typeof block !== 'object') return '';
+    if (block.type === 'list' && Array.isArray(block.items))
+      return block.items.map((item) => `- ${richBlocks(item.blocks, depth + 1) || richText(item.text)}`).join('\n');
+    return richText(block.text) || richBlocks(block.blocks, depth + 1) || richText(block.caption?.text);
+  }).filter(Boolean).join('\n');
+}
+
+function quotedMessage(message) {
+  const replied = message.reply_to_message;
+  if (!replied || replied.chat?.id !== message.chat.id) return null;
+  const text = message.quote?.text || replied.text || replied.caption || richBlocks(replied.rich_message?.blocks);
+  if (typeof text !== 'string' || !text.trim()) return null;
+  const clean = text.replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f]/g, '').trim();
+  const chars = Array.from(clean);
+  return chars.length > 1800 ? `${chars.slice(0, 1800).join('')}\n[引用内容已截断]` : clean;
+}
+
+function replyParameters(messageId) {
+  return Number.isSafeInteger(messageId) && messageId > 0
+    ? { message_id: messageId, allow_sending_without_reply: true } : null;
+}
+
 export function telegramMessage(update) {
   const message = update.message;
   if (message?.chat?.type !== 'private' || message.from?.id !== message.chat.id) return null;
@@ -31,11 +65,15 @@ export function telegramMessage(update) {
     name: message.document.file_name, size: message.document.file_size } : photo ?
     { type: 'image', fileId: photo.file_id, name: 'image.jpg', size: photo.file_size } : null;
   if (typeof message.text !== 'string' && !media) return null;
+  const quote = quotedMessage(message);
   return {
     channel: 'telegram',
     from_user_id: String(message.from.id),
     message_id: String(update.update_id),
     text: message.text || message.caption || (media?.type === 'image' ? '请先理解这张图片中的需求，并告诉我你的理解。' : '请查看收到的文件。'),
+    ...(Number.isSafeInteger(message.message_id) && message.message_id > 0
+      ? { telegram_message_id: message.message_id } : {}),
+    ...(quote ? { quote } : {}),
     ...(media ? { media } : {})
   };
 }
@@ -88,10 +126,12 @@ export class TelegramTextClient {
     return result.result;
   }
 
-  async sendText(chatId, text, { approvalId, keyboard } = {}) {
+  async sendText(chatId, text, { approvalId, keyboard, replyToMessageId } = {}) {
     const chars = Array.from(text);
     for (let i = 0; i < chars.length; i += 2000) {
       const data = { chat_id: chatId, text: chars.slice(i, i + 2000).join('') };
+      const reply = i === 0 ? replyParameters(replyToMessageId) : null;
+      if (reply) data.reply_parameters = reply;
       if (approvalId && i + 2000 >= chars.length) data.reply_markup = { inline_keyboard: [[
         { text: '批准', callback_data: `approval:approve:${approvalId}` },
         { text: '拒绝', callback_data: `approval:deny:${approvalId}` }
@@ -105,7 +145,7 @@ export class TelegramTextClient {
     }
   }
 
-  async sendProgress(chatId, id, text) {
+  async sendProgress(chatId, id, text, { replyToMessageId } = {}) {
     const previous = this.progressMessages.get(id);
     if (previous) {
       try {
@@ -113,19 +153,26 @@ export class TelegramTextClient {
         return;
       } catch (error) { console.error('Telegram progress edit:', error.message); }
     }
-    const message = await this.call('sendMessage', { chat_id: chatId, text });
+    const data = { chat_id: chatId, text };
+    const reply = replyParameters(replyToMessageId);
+    if (reply) data.reply_parameters = reply;
+    const message = await this.call('sendMessage', data);
     if (message?.message_id) this.progressMessages.set(id, message.message_id);
     if (this.progressMessages.size > 100) this.progressMessages.delete(this.progressMessages.keys().next().value);
   }
 
-  async sendMarkdown(chatId, text, fallbackText = text) {
+  async sendMarkdown(chatId, text, fallbackText = text, { replyToMessageId } = {}) {
     const markdown = text.replace(/^([^\n]+：\n\[[^\]\n]+\]) /u, '$1\n\n');
-    if (Buffer.byteLength(markdown, 'utf8') > 30000) return this.sendText(chatId, fallbackText);
+    if (Buffer.byteLength(markdown, 'utf8') > 30000)
+      return this.sendText(chatId, fallbackText, { replyToMessageId });
     try {
-      await this.call('sendRichMessage', { chat_id: chatId, rich_message: { markdown } });
+      const data = { chat_id: chatId, rich_message: { markdown } };
+      const reply = replyParameters(replyToMessageId);
+      if (reply) data.reply_parameters = reply;
+      await this.call('sendRichMessage', data);
     } catch (error) {
       console.error('Telegram Markdown:', error.message);
-      await this.sendText(chatId, fallbackText);
+      await this.sendText(chatId, fallbackText, { replyToMessageId });
     }
   }
 

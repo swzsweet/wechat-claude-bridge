@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { GatewayCore } from '../src/gateway-core.js';
+import { withQuotedContext } from '../src/quoted-prompt.js';
 
 function fixture() {
   const sent = [];
@@ -103,6 +104,29 @@ test('worker result is marked as Markdown for Telegram delivery', async () => {
   const core = new GatewayCore({ ownerId: 'owner', send: async (text, options) => sent.push({ text, options }) });
   await core.result('a', '[demo] **done**');
   assert.deepEqual(sent, [{ text: '电脑 A：\n[demo] **done**', options: { markdown: true } }]);
+});
+
+test('quoted Telegram request keeps the quote separate and threads task replies', async () => {
+  const sent = [];
+  const core = new GatewayCore({ telegramOwnerId: '123', send: async (text, options) => sent.push({ text, options }) });
+  await core.incoming({ channel: 'telegram', from_user_id: '123', message_id: 'update-1',
+    telegram_message_id: 80, text: '继续处理', quote: '之前的结果' });
+  const event = await core.next('a', false);
+  assert.equal(event.prompt, '继续处理');
+  assert.equal(event.quote, '之前的结果');
+  assert.equal(core.tasks.get(event.id).replyToMessageId, 80);
+  assert.equal(sent[0].options.replyToMessageId, 80);
+  await core.finishTask('a', event.id, 'completed', '[demo] 完成');
+  assert.equal(sent.at(-1).options.replyToMessageId, 80);
+  assert.match(withQuotedContext(event.prompt, event.quote), /之前的结果[\s\S]*用户当前要求：\n继续处理/);
+  assert.match(await core.retryTask(event.id), /已重新排队/);
+  const retry = await core.next('a', false);
+  assert.equal(retry.quote, '之前的结果');
+  assert.equal(core.tasks.get(retry.id).replyToMessageId, 80);
+  await core.incoming({ channel: 'telegram', from_user_id: '123', message_id: 'update-2',
+    telegram_message_id: 81, text: '/status', quote: '忽略这条旧消息' });
+  assert.equal(core.queues.a.length, 0);
+  assert.equal(withQuotedContext('直接执行', null), '直接执行');
 });
 
 test('structured Claude notice has a separate Telegram layout without changing WeChat text', async () => {

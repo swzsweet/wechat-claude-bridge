@@ -30,11 +30,12 @@ export class TaskStore {
 
   recovered() { return [...this.items.values()].filter((task) => task.status === 'queued'); }
 
-  async create({ worker, kind = 'task', prompt, media = null, project = null }) {
+  async create({ worker, kind = 'task', prompt, media = null, project = null,
+    quote = null, replyToMessageId = null }) {
     let id = code();
     while (this.items.has(id)) id = code();
     const now = Date.now();
-    const task = { id, worker, kind, prompt, media, project, status: 'queued',
+    const task = { id, worker, kind, prompt, media, project, quote, replyToMessageId, status: 'queued',
       stage: '排队中', createdAt: now, updatedAt: now };
     this.items.set(id, task);
     this.trim();

@@ -5,6 +5,7 @@ import { query } from '@anthropic-ai/claude-agent-sdk';
 import { bridgeToken, readJson, saveJson, sleep } from './common.js';
 import { createProject, findProject, importProjects, parseProjectList, prepareRoot, projectPath, validName } from './projects.js';
 import { workerPermissionOptions } from './permission-mode.js';
+import { withQuotedContext } from './quoted-prompt.js';
 import { shareableFile } from './file-access.js';
 
 const id = process.env.WORKER_ID?.toLowerCase();
@@ -120,8 +121,9 @@ async function run(event) {
             : { behavior: 'deny', message: '制定计划时只允许读取；请先审阅计划。' };
     }
     if (project.sessionId) options.resume = project.sessionId;
+    const request = withQuotedContext(event.prompt, event.quote);
     let prompt = event.type === 'plan'
-      ? `请只制定可审阅的 Markdown 实施计划，不要修改文件、执行需求或调用 ExitPlanMode；直接在最终回复输出完整计划。需求：\n${event.prompt}` : event.prompt;
+      ? `请只制定可审阅的 Markdown 实施计划，不要修改文件、执行需求或调用 ExitPlanMode；直接在最终回复输出完整计划。需求：\n${request}` : request;
     if (event.media) {
       const media = await api(`/media?task=${encodeURIComponent(event.id)}&id=${encodeURIComponent(event.media.id)}`, undefined, 'GET');
       const bytes = Buffer.from(media.data, 'base64');
