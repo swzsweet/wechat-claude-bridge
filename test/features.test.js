@@ -131,9 +131,9 @@ test('Telegram document upload and bounded media download use Bot API', async ()
         result: { file_path: 'documents/test.txt', file_size: 3 } }) };
       if (url.includes('/file/bot')) return { ok: true, headers: new Headers({ 'content-length': '3' }),
         arrayBuffer: async () => Buffer.from('abc') };
-      return { ok: true, json: async () => ({ ok: true, result: {} }) };
+      return { ok: true, json: async () => ({ ok: true, result: { message_id: 91 } }) };
     } });
-  await client.sendDocument('123', 'plan.md', Buffer.from('# Plan'));
+  assert.deepEqual(await client.sendDocument('123', 'plan.md', Buffer.from('# Plan')), [91]);
   assert.equal(calls[0].options.body.get('document').name, 'plan.md');
   assert.equal(calls[0].options.body.get('chat_id'), '123');
   assert.equal((await client.download('file')).toString(), 'abc');

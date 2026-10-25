@@ -133,7 +133,9 @@ export function notification(input, kind, resolvedSessionTitle = '') {
   }
   return { title: `Claude Code · ${title}`, body: `${origin}\n\n${body}`, group: `Claude Code · ${project}`,
     notification: { title, project: readable(project, 60), session,
-      sessionTitle: resolvedSessionTitle, body: markdownBody || body } };
+      sessionTitle: resolvedSessionTitle, body: markdownBody || body,
+      ...(kind === 'stop' && /^[a-f\d]{8}-[a-f\d-]{27,}$/i.test(String(input.session_id || '')) &&
+        typeof input.cwd === 'string' ? { sessionId: input.session_id, cwd: input.cwd, kind } : {}) } };
 }
 
 export async function sendBark(config, message, fetcher = fetch) {

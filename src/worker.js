@@ -1,7 +1,7 @@
 import { basename, isAbsolute, resolve } from 'node:path';
 import { homedir } from 'node:os';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
-import { query } from '@anthropic-ai/claude-agent-sdk';
+import { getSessionMessages, query } from '@anthropic-ai/claude-agent-sdk';
 import { bridgeToken, readJson, saveJson, sleep } from './common.js';
 import { createProject, findProject, importProjects, parseProjectList, prepareRoot, projectPath, validName } from './projects.js';
 import { workerPermissionOptions } from './permission-mode.js';
@@ -78,7 +78,7 @@ async function requireRemoteApproval(input) {
 
 async function run(event) {
   busy = true;
-  const name = event.project || state.active;
+  const name = event.project || (event.cwd ? basename(event.cwd) : state.active);
   const controller = new AbortController();
   activeRun = { id: event.id, controller };
   let answer = '';
@@ -94,17 +94,24 @@ async function run(event) {
       while (nextStage) {
         const current = nextStage;
         nextStage = null;
-        await api('/task-progress', { id: event.id, stage: current, project: name }).catch(console.error);
+        await api('/task-progress', { id: event.id, stage: current, project: name,
+          sessionId: activeRun?.sessionId || null }).catch(console.error);
       }
       reporting = false;
     })();
   }
   try {
-    if (!name || !state.projects[name]) throw new Error('先发送 /new-project 名称 创建项目，或 /project 名称 切换项目');
-    const project = state.projects[name];
-    const cwd = await projectPath(root, project.path, isAbsolute(project.path));
+    const project = event.cwd ? null : state.projects[name];
+    if (!project && !event.cwd) throw new Error('先发送 /new-project 名称 创建项目，或 /project 名称 切换项目');
+    const cwd = event.cwd ? await projectPath(root, event.cwd, true)
+      : await projectPath(root, project.path, isAbsolute(project.path));
+    if (event.sessionId) {
+      if (!/^[a-f\d]{8}-[a-f\d-]{27,}$/i.test(event.sessionId) ||
+          !(await getSessionMessages(event.sessionId, { dir: cwd, limit: 1 })).length)
+        throw new Error('引用的 Claude Code 会话在原目录中不存在，请检查原电脑是否仍保留该会话');
+    }
     report(event.type === 'plan' ? '正在制定计划' : '正在执行');
-    const mode = project.permissionMode === 'auto' ? 'auto' : 'manual';
+    const mode = project?.permissionMode === 'auto' ? 'auto' : 'manual';
     const options = {
       cwd,
       abortController: controller,
@@ -121,7 +128,7 @@ async function run(event) {
           : tool === 'AskUserQuestion' ? approve(tool, input)
             : { behavior: 'deny', message: '制定计划时只允许读取；请先审阅计划。' };
     }
-    if (project.sessionId) options.resume = project.sessionId;
+    if (event.sessionId || project?.sessionId) options.resume = event.sessionId || project.sessionId;
     const request = withQuotedContext(event.prompt, event.quote);
     let prompt = event.type === 'plan'
       ? `请只制定可审阅的 Markdown 实施计划，不要修改文件、执行需求或调用 ExitPlanMode；直接在最终回复输出完整计划。需求：\n${request}` : request;
@@ -163,9 +170,12 @@ async function run(event) {
         await saveJson(data, state);
         throw new Error('自动模式在当前 Claude Code/API 配置下不可用，已恢复手动模式；请重新发送任务');
       }
-      if (message.session_id && message.session_id !== project.sessionId) {
-        project.sessionId = message.session_id;
-        await saveJson(data, state);
+      if (message.session_id) {
+        activeRun.sessionId = message.session_id;
+        if (project && !event.sessionId && message.session_id !== project.sessionId) {
+          project.sessionId = message.session_id;
+          await saveJson(data, state);
+        }
       }
       if (message.type === 'result') {
         if (message.is_error) throw new Error(message.errors?.join('\n') || 'Claude Code returned an error');
@@ -176,8 +186,11 @@ async function run(event) {
     if (event.type === 'plan' && !answer.trim()) throw new Error('Claude Code 未返回计划');
     await progressWrite;
     executionComplete = true;
-    if (event.type === 'plan') await api('/plan-ready', { id: event.id, project: name, plan: answer });
-    else await api('/task-finish', { id: event.id, status: 'completed', text: `[${name}] ${answer || 'Completed without text output'}` });
+    if (event.type === 'plan') await api('/plan-ready', { id: event.id, project: name, plan: answer,
+      sessionId: activeRun.sessionId || event.sessionId });
+    else await api('/task-finish', { id: event.id, status: 'completed',
+      sessionId: activeRun.sessionId || event.sessionId,
+      text: `[${name}] ${answer || 'Completed without text output'}` });
   } catch (error) {
     if (state.projects[name]?.permissionMode === 'auto' &&
         /auto mode|classifier|permission mode|not available|unsupported/i.test(error.message)) {
@@ -187,6 +200,7 @@ async function run(event) {
     console.error('Task:', error);
     await progressWrite;
     if (!executionComplete) await api('/task-finish', { id: event.id, status: controller.signal.aborted ? 'cancelled' : 'failed',
+      sessionId: activeRun.sessionId || event.sessionId,
       text: `[${name || '未选择'}] ${controller.signal.aborted ? '任务已取消' : `任务失败：${error.message}`}` }).catch(console.error);
   } finally { busy = false; activeRun = null; }
 }

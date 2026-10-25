@@ -75,6 +75,9 @@ export function telegramMessage(update) {
     text: message.text || message.caption || (media?.type === 'image' ? '请先理解这张图片中的需求，并告诉我你的理解。' : '请查看收到的文件。'),
     ...(Number.isSafeInteger(message.message_id) && message.message_id > 0
       ? { telegram_message_id: message.message_id } : {}),
+    ...(Number.isSafeInteger(message.reply_to_message?.message_id) && message.reply_to_message.chat?.id === message.chat.id
+      ? { telegram_reply_to_message_id: message.reply_to_message.message_id } : {}),
+    ...(message.reply_to_message?.from?.is_bot === true ? { telegram_reply_is_bot: true } : {}),
     ...(quote ? { quote } : {}),
     ...(media ? { media } : {})
   };
@@ -130,6 +133,7 @@ export class TelegramTextClient {
 
   async sendText(chatId, text, { approvalId, keyboard, replyToMessageId } = {}) {
     const chars = Array.from(text);
+    const messageIds = [];
     for (let i = 0; i < chars.length; i += 2000) {
       const data = { chat_id: chatId, text: chars.slice(i, i + 2000).join('') };
       const reply = i === 0 ? replyParameters(replyToMessageId) : null;
@@ -140,11 +144,13 @@ export class TelegramTextClient {
       ]] };
       else if (keyboard?.length && i + 2000 >= chars.length) data.reply_markup = { inline_keyboard: keyboard };
       const message = await this.call('sendMessage', data);
+      if (Number.isSafeInteger(message?.message_id)) messageIds.push(message.message_id);
       if (approvalId) this.approvalMessages.set(approvalId, { chatId, messageId: message.message_id });
       if (keyboard?.length) for (const row of keyboard) for (const button of row)
         this.actionMessages.set(button.callback_data, { chatId, messageId: message.message_id });
       while (this.actionMessages.size > 500) this.actionMessages.delete(this.actionMessages.keys().next().value);
     }
+    return messageIds;
   }
 
   async sendProgress(chatId, id, text, { replyToMessageId } = {}) {
@@ -152,7 +158,7 @@ export class TelegramTextClient {
     if (previous) {
       try {
         await this.call('editMessageText', { chat_id: chatId, message_id: previous, text });
-        return;
+        return [previous];
       } catch (error) { console.error('Telegram progress edit:', error.message); }
     }
     const data = { chat_id: chatId, text };
@@ -161,6 +167,7 @@ export class TelegramTextClient {
     const message = await this.call('sendMessage', data);
     if (message?.message_id) this.progressMessages.set(id, message.message_id);
     if (this.progressMessages.size > 100) this.progressMessages.delete(this.progressMessages.keys().next().value);
+    return message?.message_id ? [message.message_id] : [];
   }
 
   async sendMarkdown(chatId, text, fallbackText = text, { replyToMessageId } = {}) {
@@ -171,10 +178,11 @@ export class TelegramTextClient {
       const data = { chat_id: chatId, rich_message: { markdown } };
       const reply = replyParameters(replyToMessageId);
       if (reply) data.reply_parameters = reply;
-      await this.call('sendRichMessage', data);
+      const message = await this.call('sendRichMessage', data);
+      return message?.message_id ? [message.message_id] : [];
     } catch (error) {
       console.error('Telegram Markdown:', error.message);
-      await this.sendText(chatId, fallbackText, { replyToMessageId });
+      return this.sendText(chatId, fallbackText, { replyToMessageId });
     }
   }
 
@@ -206,6 +214,7 @@ export class TelegramTextClient {
     }
     const result = await response.json();
     if (!response.ok || !result.ok) throw new Error(`Telegram sendDocument: ${result.description || response.status}`);
+    return result.result?.message_id ? [result.result.message_id] : [];
   }
 
   async download(fileId, maxBytes = 10 * 1024 * 1024) {

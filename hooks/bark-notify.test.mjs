@@ -62,6 +62,16 @@ test('completion preserves Markdown structure for Telegram while redacting secre
   assert.ok(!JSON.stringify(notice).includes('do-not-send'));
 });
 
+test('completed VS Code notice carries exact routing metadata without showing it in chat text', () => {
+  const id = '12345678-1234-1234-1234-123456789abc';
+  const message = notification({ cwd: 'C:/Work/warehouse', session_id: id,
+    last_assistant_message: '完成' }, 'stop');
+  assert.equal(message.notification.sessionId, id);
+  assert.equal(message.notification.cwd, 'C:/Work/warehouse');
+  assert.equal(message.notification.kind, 'stop');
+  assert.ok(!message.body.includes(id));
+});
+
 test('reads the latest AI session title only from the matching transcript', async t => {
   const root = await folder(t);
   const project = join(root, 'project');

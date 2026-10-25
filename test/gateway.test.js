@@ -138,6 +138,52 @@ test('quoted Telegram request keeps the quote separate and threads task replies'
   assert.equal(withQuotedContext('直接执行', null), '直接执行');
 });
 
+test('quoting a task result routes to its original worker, project and session', async () => {
+  const origins = new Map();
+  const sent = [];
+  const core = new GatewayCore({ telegramOwnerId: '123', resolveReply: id => origins.get(id),
+    send: async (text, options) => sent.push({ text, options }) });
+  core.route = 'a';
+  const first = await core.submitTask('b', 'first', { project: 'freight' });
+  await core.next('b', false);
+  await core.finishTask('b', first.id, 'completed', 'done', '12345678-1234-1234-1234-123456789abc');
+  origins.set(70, { worker: 'b', taskId: first.id });
+  await core.incoming({ channel: 'telegram', from_user_id: '123', message_id: 'update-70',
+    telegram_message_id: 80, telegram_reply_to_message_id: 70, telegram_reply_is_bot: true,
+    text: '继续修复', quote: 'done' });
+  const next = await core.next('b', false);
+  assert.equal(next.project, 'freight');
+  assert.equal(next.sessionId, '12345678-1234-1234-1234-123456789abc');
+  assert.equal(next.prompt, '继续修复');
+  assert.equal(core.queues.a.length, 0);
+  assert.equal(sent.at(-1).options.replyToMessageId, 80);
+});
+
+test('quoting a VS Code result targets its full session and directory', async () => {
+  const origin = { worker: 'b', cwd: 'C:\\Work\\warehouse',
+    sessionId: '12345678-1234-1234-1234-123456789abc' };
+  const core = new GatewayCore({ telegramOwnerId: '123', resolveReply: id => id === 70 ? origin : null,
+    send: async () => {} });
+  await core.incoming({ channel: 'telegram', from_user_id: '123', message_id: '1', text: '检查库存',
+    telegram_reply_to_message_id: 70, telegram_reply_is_bot: true });
+  const event = await core.next('b', false);
+  assert.equal(event.cwd, origin.cwd);
+  assert.equal(event.sessionId, origin.sessionId);
+  assert.equal(core.queues.a.length, 0);
+});
+
+test('unmapped bot reply and another Telegram account cannot silently route work', async () => {
+  const sent = [];
+  const core = new GatewayCore({ telegramOwnerId: '123', send: async text => sent.push(text) });
+  const reply = { channel: 'telegram', text: '修改这个', telegram_reply_to_message_id: 70,
+    telegram_reply_is_bot: true };
+  await core.incoming({ ...reply, from_user_id: 'other', message_id: '1' });
+  assert.equal(sent.length, 0);
+  await core.incoming({ ...reply, from_user_id: '123', message_id: '2' });
+  assert.match(sent.at(-1), /无法确定/);
+  assert.equal(core.queues.a.length, 0);
+});
+
 test('structured Claude notice has a separate Telegram layout without changing WeChat text', async () => {
   const sent = [];
   const core = new GatewayCore({ ownerId: 'owner', workerNames: { a: '家电脑' },

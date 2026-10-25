@@ -6,8 +6,10 @@ import { createWordDocument, plainDocumentText } from './document-content.js';
 export class GatewayCore {
   constructor({ send, saveOwner, saveTelegramOwner = async () => {}, saveContext = async () => {}, ownerId = null,
     telegramOwnerId = null, pairCode, telegramPairCode = null, ttlMs = 300000, workerNames = {}, initialContext = null,
-    onApprovalSettled = async () => {}, initialTasks = [], saveTasks = async () => {} }) {
+    onApprovalSettled = async () => {}, initialTasks = [], saveTasks = async () => {},
+    resolveReply = () => null }) {
     this.send = send;
+    this.resolveReply = resolveReply;
     this.onApprovalSettled = onApprovalSettled;
     this.saveOwner = saveOwner;
     this.saveTelegramOwner = saveTelegramOwner;
@@ -23,7 +25,8 @@ export class GatewayCore {
     this.tasks = new TaskStore({ entries: initialTasks, save: saveTasks });
     for (const task of this.tasks.recovered()) this.queues[task.worker].push({
       type: task.kind === 'plan' ? 'plan' : 'task', id: task.id, prompt: task.prompt,
-      media: task.media, project: task.project, quote: task.quote
+      media: task.media, project: task.project, quote: task.quote,
+      sessionId: task.sessionId, cwd: task.cwd
     });
     this.waiters = { a: null, b: null };
     this.pending = new Map();
@@ -74,11 +77,20 @@ export class GatewayCore {
       if (from !== this.ownerId) return;
       await this.updateContext(msg.context_token);
     }
+    const reply = channel === 'telegram' && msg.telegram_reply_to_message_id
+      ? this.replyTarget(this.resolveReply(msg.telegram_reply_to_message_id)) : null;
+    if (msg.telegram_reply_is_bot && !reply &&
+        (msg.media || ['prompt', 'plan'].includes(parseCommand(text).type))) {
+      await this.send('无法确定这条旧消息对应的会话，请引用新的任务结果或 Claude Code 本轮结果通知。');
+      return;
+    }
     if (msg.media && channel === 'telegram') {
       if (!this.receiveMedia) { await this.send('文件接收暂不可用。'); return; }
       try {
-        const media = await this.receiveMedia(msg.media, this.route);
-        await this.submitTask(this.route, text, { media, quote: msg.quote,
+        const worker = reply?.worker || this.route;
+        const media = await this.receiveMedia(msg.media, worker);
+        await this.submitTask(worker, text, { media, quote: msg.quote,
+          project: reply?.project, sessionId: reply?.sessionId, cwd: reply?.cwd,
           replyToMessageId: msg.telegram_message_id });
       } catch (error) { await this.send(`文件接收失败：${error.message}`); }
       return;
@@ -191,14 +203,27 @@ export class GatewayCore {
         await this.tasks.update(previous.id, { status: 'superseded', stage: '正在根据意见修订' });
         await this.submitTask(previous.worker, `${previous.prompt}\n\n请根据以下意见修改计划：\n${command.prompt}`,
           { kind: 'plan', project: previous.project, quote: msg.quote,
+            sessionId: previous.sessionId, cwd: previous.cwd,
             replyToMessageId: msg.telegram_message_id });
         return;
       }
     }
     const prompt = command.prompt;
     if (!prompt || prompt.length > 4000) { await this.send('消息为空或超过 4000 字。'); return; }
-    await this.submitTask(worker, prompt, { kind: command.type === 'plan' ? 'plan' : 'task',
+    const target = command.type === 'prompt' || command.type === 'plan' ? reply : null;
+    await this.submitTask(target?.worker || worker, prompt, { kind: command.type === 'plan' ? 'plan' : 'task',
+      project: target?.project, sessionId: target?.sessionId, cwd: target?.cwd,
       quote: msg.quote, replyToMessageId: msg.telegram_message_id });
+  }
+
+  replyTarget(origin) {
+    if (!origin) return null;
+    if (origin.taskId) {
+      const task = this.tasks.get(origin.taskId);
+      return task ? { worker: task.worker, project: task.project, sessionId: task.sessionId,
+        cwd: task.cwd } : origin.sessionId ? origin : null;
+    }
+    return origin;
   }
 
   async updateContext(token) {
@@ -214,11 +239,13 @@ export class GatewayCore {
   }
 
   async submitTask(worker, prompt, { kind = 'task', media = null, project = null,
-    quote = null, replyToMessageId = null } = {}) {
-    const task = await this.tasks.create({ worker, kind, prompt, media, project, quote, replyToMessageId });
-    this.enqueue(worker, { type: kind === 'plan' ? 'plan' : 'task', id: task.id, prompt, media, project, quote });
+    quote = null, replyToMessageId = null, sessionId = null, cwd = null } = {}) {
+    const task = await this.tasks.create({ worker, kind, prompt, media, project, quote, replyToMessageId,
+      sessionId, cwd });
+    this.enqueue(worker, { type: kind === 'plan' ? 'plan' : 'task', id: task.id, prompt, media, project,
+      quote, sessionId, cwd });
     await this.send(`${this.label(worker)} 任务 ${task.id}：排队中。`, {
-      progressTaskId: task.id, replyToMessageId });
+      progressTaskId: task.id, replyToMessageId, origin: { worker, taskId: task.id } });
     return task;
   }
 
@@ -267,6 +294,7 @@ export class GatewayCore {
     }
     const next = await this.submitTask(task.worker, task.prompt,
       { kind: task.kind, media: task.media, project: task.project, quote: task.quote,
+        sessionId: task.sessionId, cwd: task.cwd,
         replyToMessageId: task.replyToMessageId });
     return `已重新排队，编号 ${next.id}。`;
   }
@@ -298,7 +326,8 @@ export class GatewayCore {
     await this.tasks.update(id, { status: 'approved', stage: '计划已同意，执行已排队' });
     const next = await this.submitTask(task.worker,
       `请按已同意的计划执行需求。原需求：\n${task.prompt}\n\n已同意的计划：\n${task.plan}`,
-      { project: task.project, replyToMessageId: task.replyToMessageId });
+      { project: task.project, sessionId: task.sessionId, cwd: task.cwd,
+        replyToMessageId: task.replyToMessageId });
     return `已同意，执行任务 ${next.id}。`;
   }
 
@@ -314,20 +343,22 @@ export class GatewayCore {
     await this.send(`${this.label(worker)}项目：${names.join('、') || '暂无项目'}`, { keyboard });
   }
 
-  async planReady(worker, id, plan, project) {
+  async planReady(worker, id, plan, project, sessionId = null) {
     const task = this.tasks.get(id);
     if (!task || task.worker !== worker || task.kind !== 'plan' || task.status !== 'planning') return false;
-    await this.tasks.update(id, { status: 'review', stage: '等待审阅', plan: plan.slice(0, 30000), project });
+    await this.tasks.update(id, { status: 'review', stage: '等待审阅', plan: plan.slice(0, 30000), project,
+      ...(sessionId ? { sessionId } : {}) });
     await this.send(`${this.label(worker)} [${project}] 计划 ${id}：\n${plan}`, {
-      markdown: true, replyToMessageId: task.replyToMessageId });
+      markdown: true, replyToMessageId: task.replyToMessageId, origin: { worker, taskId: id } });
     await this.send(`计划 ${id}：可点击下方按钮审阅；微信可发送 /plan_approve ${id}、/plan_revise ${id} 或 /plan_discard ${id}。`, { keyboard: [[
       { text: '同意计划', callback_data: `plan:approve:${id}` },
       { text: '要求修改', callback_data: `plan:revise:${id}` },
       { text: '放弃', callback_data: `plan:discard:${id}` }
     ], [
       { text: '下载 Word', callback_data: `plan:export:${id}` }
-    ]], replyToMessageId: task.replyToMessageId });
-    if (this.sendFile) await this.sendFile(`${project}-${id}-plan.md`, Buffer.from(plan, 'utf8'), `计划 ${id}`)
+    ]], replyToMessageId: task.replyToMessageId, origin: { worker, taskId: id } });
+    if (this.sendFile) await this.sendFile(`${project}-${id}-plan.md`, Buffer.from(plan, 'utf8'),
+      `计划 ${id}`, { worker, taskId: id })
       .catch((error) => console.error('Plan document:', error.message));
     return true;
   }
@@ -343,7 +374,8 @@ export class GatewayCore {
     try {
       const bytes = format === 'docx' ? await createWordDocument(content)
         : Buffer.from(format === 'txt' ? plainDocumentText(content) : content, 'utf8');
-      await this.sendFile(name, bytes, `任务 ${id} · ${format.toUpperCase()}`);
+      await this.sendFile(name, bytes, `任务 ${id} · ${format.toUpperCase()}`,
+        { worker: task.worker, taskId: id });
       return `已发送 ${format.toUpperCase()} 文件到 Telegram。`;
     } catch (error) {
       console.error('Task export:', error.message);
@@ -351,25 +383,27 @@ export class GatewayCore {
     }
   }
 
-  async taskProgress(worker, id, stage, project = null) {
+  async taskProgress(worker, id, stage, project = null, sessionId = null) {
     const task = this.tasks.get(id);
     if (!task || task.worker !== worker || !['running', 'planning', 'revising', 'cancelling'].includes(task.status)) return false;
-    await this.tasks.update(id, { stage: String(stage).slice(0, 160), ...(project ? { project } : {}) });
+    await this.tasks.update(id, { stage: String(stage).slice(0, 160), ...(project ? { project } : {}),
+      ...(sessionId ? { sessionId } : {}) });
     await this.send(`${this.label(worker)} 任务 ${id}：${stage}`, {
-      progressTaskId: id, replyToMessageId: task.replyToMessageId });
+      progressTaskId: id, replyToMessageId: task.replyToMessageId, origin: { worker, taskId: id } });
     return true;
   }
 
-  async finishTask(worker, id, status, text) {
+  async finishTask(worker, id, status, text, sessionId = null) {
     const task = this.tasks.get(id);
     if (!task || task.worker !== worker) return false;
     if (!['completed', 'failed', 'cancelled'].includes(status)) return false;
     if (task.delivered) return true;
     await this.tasks.update(id, { status, result: String(text || '').slice(0, 12000),
+      ...(sessionId ? { sessionId } : {}),
       stage: status === 'completed' ? '已完成' : status === 'cancelled' ? '已取消' : '失败' });
     await this.send(`${this.label(worker)} 任务 ${id}：${this.tasks.get(id).stage}`, {
-      progressTaskId: id, replyToMessageId: task.replyToMessageId });
-    if (text) await this.result(worker, text, null, task.replyToMessageId);
+      progressTaskId: id, replyToMessageId: task.replyToMessageId, origin: { worker, taskId: id } });
+    if (text) await this.result(worker, text, null, task.replyToMessageId, { worker, taskId: id });
     await this.tasks.update(id, { delivered: true });
     return true;
   }
@@ -452,9 +486,10 @@ export class GatewayCore {
     return true;
   }
 
-  async result(worker, text, notification = null, replyToMessageId = null) {
+  async result(worker, text, notification = null, replyToMessageId = null, origin = null) {
     await this.send(`${this.label(worker)}：\n${text}`, {
       markdown: true,
+      ...(origin ? { origin } : {}),
       ...(replyToMessageId ? { replyToMessageId } : {}),
       ...(notification ? { telegramMarkdown: formatTelegramNotification(this.label(worker), notification) } : {})
     });

@@ -6,6 +6,7 @@ import { WeChatTextClient } from './wechat.js';
 import { TelegramTextClient, validTelegramToken } from './telegram.js';
 import { GatewayCore } from './gateway-core.js';
 import { deliverToChats } from './chat-delivery.js';
+import { ReplyOrigins } from './reply-origins.js';
 import { bridgeToken, equalSecret, readJson, saveJson, sleep } from './common.js';
 
 const dataDir = resolve(process.env.BRIDGE_DATA || 'data');
@@ -20,6 +21,10 @@ const syncFile = resolve(dataDir, 'sync.txt');
 const contextFile = resolve(dataDir, 'wechat-context.json');
 const state = await readJson(stateFile, { ownerId: null });
 const savedTasks = await readJson(resolve(dataDir, 'tasks.json'), []);
+const origins = new ReplyOrigins({
+  entries: await readJson(resolve(dataDir, 'reply-origins.json'), []),
+  save: (entries) => saveJson(resolve(dataDir, 'reply-origins.json'), entries)
+});
 const savedContext = await readJson(contextFile, { token: null });
 const workerNames = await readJson(resolve(dataDir, 'computer-names.json'), {});
 let telegramToken = process.env.TELEGRAM_BOT_TOKEN?.trim();
@@ -52,6 +57,7 @@ const core = new GatewayCore({
   telegramOwnerId: state.telegramOwnerId || null,
   initialContext: savedContext.token,
   initialTasks: savedTasks,
+  resolveReply: (messageId) => origins.get(messageId),
   saveTasks: async (tasks) => saveJson(resolve(dataDir, 'tasks.json'), tasks),
   saveContext: async (context) => saveJson(contextFile, { token: context }),
   workerNames,
@@ -61,19 +67,29 @@ const core = new GatewayCore({
   saveTelegramOwner: async (telegramOwnerId) => saveJson(stateFile, { ownerId: core.ownerId, telegramOwnerId }),
   onApprovalSettled: async (id) => telegram?.clearApproval(id),
   send: async (message, { approvalId, markdown, telegramMarkdown, progressTaskId, keyboard,
-    replyToMessageId } = {}) => {
+    replyToMessageId, origin } = {}) => {
     const senders = [];
     if (core.ownerId) senders.push(async (text) => {
       for (let i = 0; i < text.length; i += 1200)
         await client.sendText(core.ownerId, text.slice(i, i + 1200), core.currentContext || undefined);
     });
-    if (telegram && core.telegramOwnerId) senders.push((text) => progressTaskId
-      ? telegram.sendProgress(core.telegramOwnerId, progressTaskId, text, { replyToMessageId })
-      : markdown ? telegram.sendMarkdown(core.telegramOwnerId, telegramMarkdown || text, text, { replyToMessageId })
-        : telegram.sendText(core.telegramOwnerId, text, { approvalId, keyboard, replyToMessageId }));
+    if (telegram && core.telegramOwnerId) senders.push(async (text) => {
+      const ids = progressTaskId
+        ? await telegram.sendProgress(core.telegramOwnerId, progressTaskId, text, { replyToMessageId })
+        : markdown ? await telegram.sendMarkdown(core.telegramOwnerId, telegramMarkdown || text, text, { replyToMessageId })
+          : await telegram.sendText(core.telegramOwnerId, text, { approvalId, keyboard, replyToMessageId });
+      if (origin && ids?.length) await recordOrigin(ids, origin);
+    });
     await deliverToChats(message, senders);
   }
 });
+async function recordOrigin(ids, origin) {
+  const task = origin.taskId ? core.tasks.get(origin.taskId) : null;
+  const saved = task ? { ...origin, project: task.project, sessionId: task.sessionId, cwd: task.cwd }
+    : origin;
+  await origins.record(ids, saved)
+    .catch((error) => console.error('Reply origin:', error.message));
+}
 core.receiveMedia = async (media, worker) => {
   if (!telegram || !media.fileId || !['image', 'document'].includes(media.type) || media.size > 10 * 1024 * 1024)
     throw new Error('仅支持 10 MB 以内的图片或文件');
@@ -84,9 +100,10 @@ core.receiveMedia = async (media, worker) => {
   await writeFile(resolve(dir, id), bytes, { mode: 0o600 });
   return { id, type: media.type, name: basename(media.name || 'attachment').replace(/[^\p{L}\p{N}._ -]/gu, '_').slice(0, 100), worker };
 };
-core.sendFile = async (name, bytes, caption) => {
+core.sendFile = async (name, bytes, caption, origin = null) => {
   if (!telegram || !core.telegramOwnerId) return;
-  await telegram.sendDocument(core.telegramOwnerId, name, bytes, caption);
+  const ids = await telegram.sendDocument(core.telegramOwnerId, name, bytes, caption);
+  if (origin && ids?.length) await recordOrigin(ids, origin);
 };
 await core.tasks.persist();
 
@@ -130,7 +147,8 @@ const server = createServer(async (request, response) => {
     if (url.pathname === '/plan-ready') {
       if (typeof data.id !== 'string' || typeof data.plan !== 'string' || data.plan.length > 30000 || typeof data.project !== 'string')
         return json(response, 400, { error: 'Invalid plan' });
-      const ok = await core.planReady(worker, data.id, data.plan, data.project);
+      const ok = await core.planReady(worker, data.id, data.plan, data.project,
+        typeof data.sessionId === 'string' ? data.sessionId : null);
       return json(response, ok ? 200 : 404, { ok });
     }
     if (url.pathname === '/file-result') {
@@ -174,18 +192,23 @@ const server = createServer(async (request, response) => {
         (notice.sessionTitle === undefined ||
           (typeof notice.sessionTitle === 'string' && notice.sessionTitle.length <= 100)) &&
         typeof notice.body === 'string' && notice.body.length <= 12000 ? notice : null;
-      await core.result(worker, data.text.slice(0, 12000), formatted);
+      const origin = formatted && /^[a-f\d]{8}-[a-f\d-]{27,}$/i.test(formatted.sessionId || '') &&
+        typeof formatted.cwd === 'string' && formatted.cwd.length <= 1000 &&
+        formatted.kind === 'stop' ? { worker, sessionId: formatted.sessionId, cwd: formatted.cwd } : null;
+      await core.result(worker, data.text.slice(0, 12000), formatted, null, origin);
       return json(response, 200, { ok: true });
     }
     if (url.pathname === '/task-progress') {
       if (typeof data.id !== 'string' || typeof data.stage !== 'string') return json(response, 400, { error: 'Invalid progress' });
-      const ok = await core.taskProgress(worker, data.id, data.stage, typeof data.project === 'string' ? data.project : null);
+      const ok = await core.taskProgress(worker, data.id, data.stage, typeof data.project === 'string' ? data.project : null,
+        typeof data.sessionId === 'string' ? data.sessionId : null);
       return json(response, ok ? 200 : 404, { ok });
     }
     if (url.pathname === '/task-finish') {
       if (typeof data.id !== 'string' || typeof data.status !== 'string' || typeof data.text !== 'string')
         return json(response, 400, { error: 'Invalid finish' });
-      const ok = await core.finishTask(worker, data.id, data.status, data.text.slice(0, 12000));
+      const ok = await core.finishTask(worker, data.id, data.status, data.text.slice(0, 12000),
+        typeof data.sessionId === 'string' ? data.sessionId : null);
       return json(response, ok ? 200 : 404, { ok });
     }
     return json(response, 404, { error: 'Unknown endpoint' });
