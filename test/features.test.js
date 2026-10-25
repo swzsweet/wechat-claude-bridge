@@ -107,6 +107,18 @@ test('Telegram document upload and bounded media download use Bot API', async ()
   assert.equal(calls[1].url.endsWith('/getFile'), true);
 });
 
+test('Telegram document upload retries a transient network error once', async () => {
+  let attempts = 0;
+  const client = new TelegramTextClient({ token: '123:test', cursorFile: 'unused', onMessage: async () => {},
+    request: async () => {
+      attempts++;
+      if (attempts === 1) throw new TypeError('fetch failed');
+      return { ok: true, json: async () => ({ ok: true, result: {} }) };
+    } });
+  await client.sendDocument('123', 'plan.md', Buffer.from('# Plan'));
+  assert.equal(attempts, 2);
+});
+
 test('file sharing blocks traversal, hidden and credential paths, and symlink escape', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'bridge-files-'));
   try {

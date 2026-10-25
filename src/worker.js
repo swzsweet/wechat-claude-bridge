@@ -21,7 +21,8 @@ async function api(path, payload, method = 'POST') {
     method,
     headers: { authorization: `Bearer ${token}`, 'x-worker-id': id, 'content-type': 'application/json' },
     body: method === 'POST' ? JSON.stringify(payload) : undefined,
-    signal: AbortSignal.timeout(method === 'GET' ? 60000 : path === '/file-result' ? 90000 : 15000)
+    signal: AbortSignal.timeout(method === 'GET' ? 60000 : path === '/file-result' ? 90000 :
+      path === '/task-progress' ? 30000 : 15000)
   });
   const result = await response.json();
   if (!response.ok) throw new Error(`${response.status}: ${result.error}`);
@@ -80,11 +81,27 @@ async function run(event) {
   activeRun = { id: event.id, controller };
   let answer = '';
   let executionComplete = false;
+  let nextStage = null;
+  let reporting = false;
+  let progressWrite = Promise.resolve();
+  function report(stage) {
+    nextStage = stage;
+    if (reporting) return;
+    reporting = true;
+    progressWrite = (async () => {
+      while (nextStage) {
+        const current = nextStage;
+        nextStage = null;
+        await api('/task-progress', { id: event.id, stage: current, project: name }).catch(console.error);
+      }
+      reporting = false;
+    })();
+  }
   try {
     if (!name || !state.projects[name]) throw new Error('先发送 /new-project 名称 创建项目，或 /project 名称 切换项目');
     const project = state.projects[name];
     const cwd = await projectPath(root, project.path, isAbsolute(project.path));
-    await api('/task-progress', { id: event.id, stage: event.type === 'plan' ? '正在制定计划' : '正在执行', project: name }).catch(console.error);
+    report(event.type === 'plan' ? '正在制定计划' : '正在执行');
     const mode = project.permissionMode === 'auto' ? 'auto' : 'manual';
     const options = {
       cwd,
@@ -130,8 +147,7 @@ async function run(event) {
       const tool = message.type === 'assistant' && message.message?.content?.find((block) => block.type === 'tool_use');
       if (tool && Date.now() - lastProgress > 2000) {
         lastProgress = Date.now();
-        await api('/task-progress', { id: event.id, stage: `${event.type === 'plan' ? '制定计划' : '执行任务'} · ${tool.name}`,
-          project: name }).catch(console.error);
+        report(`${event.type === 'plan' ? '制定计划' : '执行任务'} · ${tool.name}`);
       }
       if (event.type !== 'plan' && mode === 'auto' && message.type === 'system' && message.subtype === 'init' &&
           typeof message.permissionMode === 'string' && message.permissionMode !== 'auto') {
@@ -150,6 +166,7 @@ async function run(event) {
     }
     if (controller.signal.aborted) throw new Error('任务已取消');
     if (event.type === 'plan' && !answer.trim()) throw new Error('Claude Code 未返回计划');
+    await progressWrite;
     executionComplete = true;
     if (event.type === 'plan') await api('/plan-ready', { id: event.id, project: name, plan: answer });
     else await api('/task-finish', { id: event.id, status: 'completed', text: `[${name}] ${answer || 'Completed without text output'}` });
@@ -160,6 +177,7 @@ async function run(event) {
       await saveJson(data, state).catch(console.error);
     }
     console.error('Task:', error);
+    await progressWrite;
     if (!executionComplete) await api('/task-finish', { id: event.id, status: controller.signal.aborted ? 'cancelled' : 'failed',
       text: `[${name || '未选择'}] ${controller.signal.aborted ? '任务已取消' : `任务失败：${error.message}`}` }).catch(console.error);
   } finally { busy = false; activeRun = null; }

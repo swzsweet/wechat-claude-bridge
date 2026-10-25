@@ -140,12 +140,21 @@ export class TelegramTextClient {
   }
 
   async sendDocument(chatId, name, bytes, caption = '') {
-    const form = new FormData();
-    form.set('chat_id', String(chatId));
-    if (caption) form.set('caption', caption.slice(0, 900));
-    form.set('document', new Blob([bytes]), name);
-    const response = await this.request(`https://api.telegram.org/bot${this.token}/sendDocument`,
-      { method: 'POST', body: form, signal: AbortSignal.timeout(60000) });
+    let response;
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const form = new FormData();
+      form.set('chat_id', String(chatId));
+      if (caption) form.set('caption', caption.slice(0, 900));
+      form.set('document', new Blob([bytes]), name);
+      try {
+        response = await this.request(`https://api.telegram.org/bot${this.token}/sendDocument`,
+          { method: 'POST', body: form, signal: AbortSignal.timeout(60000) });
+        break;
+      } catch (error) {
+        if (attempt === 1) throw error;
+        await sleep(1500);
+      }
+    }
     const result = await response.json();
     if (!response.ok || !result.ok) throw new Error(`Telegram sendDocument: ${result.description || response.status}`);
   }
