@@ -2,6 +2,8 @@ import { readFile, writeFile, mkdir } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { sleep } from './common.js';
 
+export const validTelegramToken = (token) => /^\d+:[A-Za-z0-9_-]+$/.test(token);
+
 export function telegramMessage(update) {
   const message = update.message;
   if (message?.chat?.type !== 'private' || message.from?.id !== message.chat.id || typeof message.text !== 'string') return null;

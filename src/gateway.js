@@ -3,7 +3,7 @@ import { resolve } from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { WeChatTextClient } from './wechat.js';
-import { TelegramTextClient } from './telegram.js';
+import { TelegramTextClient, validTelegramToken } from './telegram.js';
 import { GatewayCore } from './gateway-core.js';
 import { deliverToChats } from './chat-delivery.js';
 import { bridgeToken, equalSecret, readJson, saveJson, sleep } from './common.js';
@@ -26,7 +26,10 @@ if (!telegramToken) {
   try { telegramToken = (await readFile(resolve(dataDir, 'telegram-token.txt'), 'utf8')).trim(); }
   catch (error) { if (error.code !== 'ENOENT') throw error; }
 }
-if (telegramToken && !/^\d+:[A-Za-z0-9_-]+$/.test(telegramToken)) throw new Error('Invalid Telegram bot token');
+if (telegramToken && !validTelegramToken(telegramToken)) {
+  console.error('Invalid Telegram bot token; Telegram channel disabled');
+  telegramToken = null;
+}
 const client = new WeChatTextClient({ credentialFile, cursorFile: syncFile, onMessage: (msg) => core.incoming(msg) });
 const telegram = telegramToken ? new TelegramTextClient({
   token: telegramToken, cursorFile: resolve(dataDir, 'telegram-offset.txt'), onMessage: (msg) => core.incoming(msg)

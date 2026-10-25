@@ -1,6 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { TelegramTextClient, telegramMessage } from '../src/telegram.js';
+import { TelegramTextClient, telegramMessage, validTelegramToken } from '../src/telegram.js';
+
+test('Bot Token format rejects pasted shell commands', () => {
+  assert.equal(validTelegramToken('123456:Ab_cd-Ef'), true);
+  assert.equal(validTelegramToken('install -o wechatbridge'), false);
+  assert.equal(validTelegramToken(''), false);
+});
 
 test('Telegram accepts only text from the sender in a private chat', () => {
   const update = { update_id: 17, message: {

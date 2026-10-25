@@ -4,18 +4,14 @@
 
 ## 可选：接入 Telegram Bot
 
-先在 Telegram 的 BotFather 创建 Bot。不要把 Bot Token 发到聊天或提交到 GitHub。在 PVE Web Shell 中以 root 运行以下命令，按提示输入 Token（输入不会回显）：
+先在 Telegram 的 BotFather 创建 Bot。不要把 Bot Token 发到聊天或提交到 GitHub。完成下方首次安装或更新后，在 PVE Web Shell 中以 root **单独运行**以下命令。脚本会等待你输入 Token（输入不会回显），验证格式后才保存并重启服务：
 
 ```sh
-read -r -s -p 'Telegram Bot Token: ' bot_token; printf '\n'
-install -o wechatbridge -g wechatbridge -m 0600 /dev/null /var/lib/wechat-claude-bridge/telegram-token.txt
-printf '%s' "$bot_token" > /var/lib/wechat-claude-bridge/telegram-token.txt
-unset bot_token
-systemctl restart wechat-claude-gateway.service
+bash /opt/wechat-claude-bridge/current/deploy/pve/set-telegram-token.sh
 journalctl -u wechat-claude-gateway.service -n 30 --no-pager
 ```
 
-日志会显示 `/bind` 加一次性绑定码。在 Telegram 中与该 Bot **私聊**并发送这条命令。绑定成功后，微信和 Telegram 会同时收到任务回复和审批请求；任一端都能发任务、切换项目或批准/拒绝，先提交的审批决定生效。Bot Token、Telegram 绑定 ID 和轮询位置保存在 `/var/lib/wechat-claude-bridge/`，不会上传到 GitHub。Telegram Bot 不应同时被其他程序以 `getUpdates` 轮询；如果此前配置过 webhook，需先从旧系统移除 webhook。
+日志会显示 `/bind` 加一次性绑定码。在 Telegram 中与该 Bot **私聊**并发送这条命令。绑定成功后，微信和 Telegram 会同时收到任务回复和审批请求；任一端都能发任务、切换项目或批准/拒绝，先提交的审批决定生效。Bot Token、Telegram 绑定 ID 和轮询位置保存在 `/var/lib/wechat-claude-bridge/`，不会上传到 GitHub。Telegram Bot 不应同时被其他程序以 `getUpdates` 轮询；如果此前配置过 webhook，需先从旧系统移除 webhook。格式无效的 Token 会禁用 Telegram 通道，但微信仍保持运行。
 
 ## 首次安装
 
