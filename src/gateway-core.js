@@ -229,5 +229,5 @@ export class GatewayCore {
     return true;
   }
 
-  async result(worker, text) { await this.send(`${this.label(worker)}：\n${text}`); }
+  async result(worker, text) { await this.send(`${this.label(worker)}：\n${text}`, { markdown: true }); }
 }

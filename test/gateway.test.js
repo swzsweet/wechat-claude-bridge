@@ -98,6 +98,13 @@ test('custom computer name appears in replies while /a remains the route', async
   assert.match(sent.at(-1), new RegExp(`^家电脑请求 ${id}`));
 });
 
+test('worker result is marked as Markdown for Telegram delivery', async () => {
+  const sent = [];
+  const core = new GatewayCore({ ownerId: 'owner', send: async (text, options) => sent.push({ text, options }) });
+  await core.result('a', '[demo] **done**');
+  assert.deepEqual(sent, [{ text: '电脑 A：\n[demo] **done**', options: { markdown: true } }]);
+});
+
 test('only the bound owner updates the saved WeChat context', async () => {
   const contexts = [];
   const core = new GatewayCore({

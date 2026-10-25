@@ -34,6 +34,29 @@ test('Telegram text is split below the sendMessage limit', async () => {
   assert.ok(calls.every(({ url }) => url.endsWith('/sendMessage')));
 });
 
+test('Claude Markdown uses Telegram rich messages and falls back if rejected', async () => {
+  const calls = [];
+  let rejectRich = false;
+  const client = new TelegramTextClient({ token: '123:example', cursorFile: 'unused', onMessage: async () => {},
+    request: async (url, options) => {
+      const method = url.split('/').at(-1);
+      calls.push({ method, data: JSON.parse(options.body) });
+      if (rejectRich && method === 'sendRichMessage') return {
+        ok: false, status: 400, json: async () => ({ ok: false, description: 'unsupported Markdown' })
+      };
+      return { ok: true, json: async () => ({ ok: true, result: { message_id: 42 } }) };
+    }
+  });
+  const markdown = '# Plan\n\n**Important** item\n\n```js\nconsole.log(1)\n```';
+  await client.sendMarkdown('123', markdown);
+  assert.deepEqual(calls, [{ method: 'sendRichMessage',
+    data: { chat_id: '123', rich_message: { markdown } } }]);
+  rejectRich = true;
+  await client.sendMarkdown('123', markdown);
+  assert.deepEqual(calls.slice(1).map(({ method }) => method), ['sendRichMessage', 'sendMessage']);
+  assert.equal(calls.at(-1).data.text, markdown);
+});
+
 test('Telegram approval buttons belong to a private message from the bot', async () => {
   const calls = [];
   const client = new TelegramTextClient({ token: '123:example', cursorFile: 'unused', onMessage: async () => {},

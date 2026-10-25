@@ -79,6 +79,16 @@ export class TelegramTextClient {
     }
   }
 
+  async sendMarkdown(chatId, text) {
+    if (Buffer.byteLength(text, 'utf8') > 30000) return this.sendText(chatId, text);
+    try {
+      await this.call('sendRichMessage', { chat_id: chatId, rich_message: { markdown: text } });
+    } catch (error) {
+      console.error('Telegram Markdown:', error.message);
+      await this.sendText(chatId, text);
+    }
+  }
+
   ownsApprovalMessage(callback) {
     const sent = this.approvalMessages.get(callback.approval_id);
     return sent?.chatId === callback.from_user_id && sent.messageId === callback.telegram_message_id;

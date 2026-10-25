@@ -56,13 +56,15 @@ const core = new GatewayCore({
   saveOwner: async (ownerId) => saveJson(stateFile, { ownerId, telegramOwnerId: core.telegramOwnerId }),
   saveTelegramOwner: async (telegramOwnerId) => saveJson(stateFile, { ownerId: core.ownerId, telegramOwnerId }),
   onApprovalSettled: async (id) => telegram?.clearApproval(id),
-  send: async (message, { approvalId } = {}) => {
+  send: async (message, { approvalId, markdown } = {}) => {
     const senders = [];
     if (core.ownerId) senders.push(async (text) => {
       for (let i = 0; i < text.length; i += 1200)
         await client.sendText(core.ownerId, text.slice(i, i + 1200), core.currentContext || undefined);
     });
-    if (telegram && core.telegramOwnerId) senders.push((text) => telegram.sendText(core.telegramOwnerId, text, { approvalId }));
+    if (telegram && core.telegramOwnerId) senders.push((text) => markdown
+      ? telegram.sendMarkdown(core.telegramOwnerId, text)
+      : telegram.sendText(core.telegramOwnerId, text, { approvalId }));
     await deliverToChats(message, senders);
   }
 });
