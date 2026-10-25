@@ -39,6 +39,7 @@ export function equalSecret(expected, actual) {
 
 export function parseCommand(text) {
   const value = text.trim();
+  if (value === '/help' || value === '/start') return { type: 'help' };
   const decision = value.match(/^(?:\/)?(批准|拒绝|approve|deny)\s+([A-F0-9]{8})$/i);
   if (decision) return { type: 'decision', allow: /^(批准|approve)$/i.test(decision[1]), id: decision[2].toUpperCase() };
   const answer = value.match(/^(?:\/)?(回答|答|answer)\s+([A-F0-9]{8})\s+(.+)$/i);
@@ -54,16 +55,18 @@ export function parseCommand(text) {
   };
   if (value === '/status') return { type: 'status' };
   if (value === '/new') return { type: 'new' };
-  if (value === '/projects' || value === '项目列表' || value === '有哪些项目') return { type: 'project', action: 'list' };
-  const batch = value.match(/^(?:\/import-projects|登记项目|记住这些项目|这些是项目目录)\s*[:：]?\s*\r?\n([\s\S]+)$/i);
+  if (value === '/projects' || value === '/project' || value === '项目列表' || value === '有哪些项目') return { type: 'project', action: 'list' };
+  if (value === '/new_project' || value === '/new-project') return { type: 'usage', text: '请发送 /new_project 项目名。' };
+  if (value === '/import_project' || value === '/import-project') return { type: 'usage', text: '请发送 /import_project 项目名 完整路径。' };
+  const batch = value.match(/^(?:\/import[_-]projects|登记项目|记住这些项目|这些是项目目录)\s*[:：]?\s*\r?\n([\s\S]+)$/i);
   if (batch) return { type: 'project', action: 'bulk', list: batch[1] };
-  if (/^(?:\/import-projects|登记项目|记住这些项目|这些是项目目录)\s*[:：]?$/i.test(value)) return { type: 'project', action: 'await-bulk' };
+  if (/^(?:\/import[_-]projects|登记项目|记住这些项目|这些是项目目录)\s*[:：]?$/i.test(value)) return { type: 'project', action: 'await-bulk' };
   const select = value.match(/^\/project\s+(.+)$/i)
     || value.match(/^(?:切换到|切换项目(?:到)?|打开项目|使用项目|项目[：: ])\s*(.+)$/u);
   if (select) return { type: 'project', action: 'select', name: select[1].trim() };
-  const create = value.match(/^\/new-project\s+(.+)$/i);
+  const create = value.match(/^\/new[_-]project\s+(.+)$/i);
   if (create) return { type: 'project', action: 'create', name: create[1].trim() };
-  const add = value.match(/^\/import-project\s+([^\s]+)\s+(.+)$/i);
+  const add = value.match(/^\/import[_-]project\s+([^\s]+)\s+(.+)$/i);
   if (add) return { type: 'project', action: 'import', name: add[1], path: add[2].trim() };
   return { type: 'prompt', prompt: value };
 }

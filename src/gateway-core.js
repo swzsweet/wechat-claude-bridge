@@ -99,6 +99,11 @@ export class GatewayCore {
       await this.send(`已提交 ${command.id}。`);
       return command.allow === false ? '已拒绝。' : '已批准。';
     }
+    if (command.type === 'help') {
+      await this.send('命令：/a、/b 切换电脑；/status 查看在线状态；/projects 查看项目；/project 项目名 切换项目；/new_project 项目名 新建项目；/import_project 项目名 完整路径 登记项目；/import_projects 批量登记；/new 新开会话；/auto on、/auto off、/auto 查看自动模式。也可直接发送任务。');
+      return;
+    }
+    if (command.type === 'usage') { await this.send(command.text); return; }
     if (command.type === 'status') {
       const state = (id) => Date.now() - this.online[id] < 45000 ? '在线' : '离线';
       await this.send(`当前：${this.label(this.route)}。${this.label('a')} ${state('a')}，${this.label('b')} ${state('b')}。`);

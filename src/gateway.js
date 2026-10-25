@@ -33,6 +33,7 @@ if (telegramToken && !validTelegramToken(telegramToken)) {
 const client = new WeChatTextClient({ credentialFile, cursorFile: syncFile, onMessage: (msg) => core.incoming(msg) });
 const telegram = telegramToken ? new TelegramTextClient({
   token: telegramToken, cursorFile: resolve(dataDir, 'telegram-offset.txt'), onMessage: (msg) => core.incoming(msg),
+  getOwnerId: () => core.telegramOwnerId,
   onCallback: (callback) => {
     if (callback.from_user_id !== core.telegramOwnerId) return '无权操作。';
     if (!telegram.ownsApprovalMessage(callback)) return '审批已处理或过期。';

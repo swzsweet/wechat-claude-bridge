@@ -187,6 +187,25 @@ test('project commands are routed to the selected computer', async () => {
   assert.deepEqual(await core.next('b', false), { type: 'project', action: 'select', name: 'demo' });
 });
 
+test('Telegram menu commands have working handlers while old project commands remain valid', async () => {
+  const { core, sent } = fixture();
+  await core.incoming({ from_user_id: 'owner', text: '/help' });
+  assert.match(sent.at(-1), /\/import_projects/);
+  await core.incoming({ from_user_id: 'owner', text: '/new_project' });
+  assert.match(sent.at(-1), /项目名/);
+  await core.incoming({ from_user_id: 'owner', text: '/new_project demo' });
+  assert.deepEqual(await core.next('a', false), { type: 'project', action: 'create', name: 'demo' });
+  await core.incoming({ from_user_id: 'owner', text: '/import_project demo C:\\Work\\demo' });
+  assert.deepEqual(await core.next('a', false), { type: 'project', action: 'import', name: 'demo', path: 'C:\\Work\\demo' });
+  await core.incoming({ from_user_id: 'owner', text: '/project' });
+  assert.deepEqual(await core.next('a', false), { type: 'project', action: 'list' });
+  await core.incoming({ from_user_id: 'owner', text: '/import_projects' });
+  assert.match(sent.at(-1), /下一条消息/);
+  await core.incoming({ from_user_id: 'owner', text: '取消' });
+  await core.incoming({ from_user_id: 'owner', text: '/new-project legacy' });
+  assert.deepEqual(await core.next('a', false), { type: 'project', action: 'create', name: 'legacy' });
+});
+
 test('auto mode commands route to the selected worker', async () => {
   const { core } = fixture();
   await core.incoming({ from_user_id: 'owner', text: '/b /auto on' });

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { TelegramTextClient, telegramMessage, telegramApprovalCallback, validTelegramToken } from '../src/telegram.js';
+import { TelegramTextClient, telegramMessage, telegramApprovalCallback, telegramCommands, validTelegramToken } from '../src/telegram.js';
 
 test('Bot Token format rejects pasted shell commands', () => {
   assert.equal(validTelegramToken('123456:Ab_cd-Ef'), true);
@@ -56,4 +56,24 @@ test('Telegram approval buttons belong to a private message from the bot', async
   assert.equal(calls.at(-1).method, 'editMessageReplyMarkup');
   assert.deepEqual(calls.at(-1).data.reply_markup, { inline_keyboard: [] });
   assert.equal(client.ownsApprovalMessage(callback), false);
+});
+
+test('Telegram menu exposes only binding before pairing and working commands afterward', async () => {
+  const calls = [];
+  const client = new TelegramTextClient({ token: '123:example', cursorFile: 'unused', onMessage: async () => {},
+    request: async (url, options) => {
+      calls.push({ method: url.split('/').at(-1), data: JSON.parse(options.body) });
+      return { ok: true, json: async () => ({ ok: true, result: true }) };
+    }
+  });
+  await client.configureMenu(null);
+  assert.deepEqual(calls.map((call) => call.method), ['setMyCommands']);
+  assert.deepEqual(calls[0].data.commands.map((command) => command.command), ['bind']);
+  calls.length = 0;
+  await client.configureMenu('123');
+  assert.deepEqual(calls.map((call) => call.method), ['setMyCommands', 'setMyCommands', 'setChatMenuButton']);
+  assert.deepEqual(calls[1].data.scope, { type: 'chat', chat_id: '123' });
+  assert.deepEqual(calls[1].data.commands, telegramCommands);
+  assert.deepEqual(calls[2].data.menu_button, { type: 'commands' });
+  assert.ok(telegramCommands.every(({ command }) => /^[a-z0-9_]{1,32}$/.test(command)));
 });

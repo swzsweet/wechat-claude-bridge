@@ -4,6 +4,20 @@ import { sleep } from './common.js';
 
 export const validTelegramToken = (token) => /^\d+:[A-Za-z0-9_-]+$/.test(token);
 
+export const telegramCommands = [
+  { command: 'a', description: '切换到电脑 A' },
+  { command: 'b', description: '切换到电脑 B' },
+  { command: 'status', description: '查看两台电脑的在线状态' },
+  { command: 'projects', description: '查看项目列表' },
+  { command: 'project', description: '切换项目，后面填写项目名' },
+  { command: 'new_project', description: '新建项目，后面填写项目名' },
+  { command: 'import_project', description: '登记已有项目，后面填写名称和路径' },
+  { command: 'import_projects', description: '批量登记项目目录' },
+  { command: 'new', description: '下一条任务开启新会话' },
+  { command: 'auto', description: '查看自动模式；可加 on 或 off' },
+  { command: 'help', description: '查看命令说明' }
+];
+
 export function telegramMessage(update) {
   const message = update.message;
   if (message?.chat?.type !== 'private' || message.from?.id !== message.chat.id || typeof message.text !== 'string') return null;
@@ -29,13 +43,15 @@ export function telegramApprovalCallback(update) {
 }
 
 export class TelegramTextClient {
-  constructor({ token, cursorFile, onMessage, onCallback = async () => {}, request = fetch }) {
+  constructor({ token, cursorFile, onMessage, onCallback = async () => {}, getOwnerId = () => null, request = fetch }) {
     this.token = token;
     this.cursorFile = cursorFile;
     this.onMessage = onMessage;
     this.onCallback = onCallback;
+    this.getOwnerId = getOwnerId;
     this.request = request;
     this.approvalMessages = new Map();
+    this.menuConfiguredFor = undefined;
   }
 
   async call(method, data, timeout = 45000) {
@@ -80,12 +96,29 @@ export class TelegramTextClient {
     await this.call('answerCallbackQuery', { callback_query_id: id, text });
   }
 
+  async configureMenu(ownerId) {
+    await this.call('setMyCommands', { commands: [
+      { command: 'bind', description: '绑定微信桥接，后面填写绑定码' }
+    ] }, 10000);
+    if (!ownerId) return;
+    await this.call('setMyCommands', { commands: telegramCommands,
+      scope: { type: 'chat', chat_id: ownerId } }, 10000);
+    await this.call('setChatMenuButton', { chat_id: ownerId, menu_button: { type: 'commands' } }, 10000);
+  }
+
   async start() {
     let offset = 0;
     try { offset = Number(await readFile(this.cursorFile, 'utf8')) || 0; }
     catch (error) { if (error.code !== 'ENOENT') throw error; }
     let failures = 0;
     while (true) {
+      const ownerId = this.getOwnerId();
+      if (ownerId !== this.menuConfiguredFor) {
+        try {
+          await this.configureMenu(ownerId);
+          this.menuConfiguredFor = ownerId;
+        } catch (error) { console.error('Telegram menu:', error.message); }
+      }
       try {
         const updates = await this.call('getUpdates', {
           offset, timeout: 30, allowed_updates: ['message', 'callback_query']
