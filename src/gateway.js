@@ -32,7 +32,12 @@ if (telegramToken && !validTelegramToken(telegramToken)) {
 }
 const client = new WeChatTextClient({ credentialFile, cursorFile: syncFile, onMessage: (msg) => core.incoming(msg) });
 const telegram = telegramToken ? new TelegramTextClient({
-  token: telegramToken, cursorFile: resolve(dataDir, 'telegram-offset.txt'), onMessage: (msg) => core.incoming(msg)
+  token: telegramToken, cursorFile: resolve(dataDir, 'telegram-offset.txt'), onMessage: (msg) => core.incoming(msg),
+  onCallback: (callback) => {
+    if (callback.from_user_id !== core.telegramOwnerId) return '无权操作。';
+    if (!telegram.ownsApprovalMessage(callback)) return '审批已处理或过期。';
+    return core.incoming(callback);
+  }
 }) : null;
 
 const pairCode = randomBytes(6).toString('hex').toUpperCase();
@@ -49,13 +54,14 @@ const core = new GatewayCore({
   telegramPairCode,
   saveOwner: async (ownerId) => saveJson(stateFile, { ownerId, telegramOwnerId: core.telegramOwnerId }),
   saveTelegramOwner: async (telegramOwnerId) => saveJson(stateFile, { ownerId: core.ownerId, telegramOwnerId }),
-  send: async (message) => {
+  onApprovalSettled: async (id) => telegram?.clearApproval(id),
+  send: async (message, { approvalId } = {}) => {
     const senders = [];
     if (core.ownerId) senders.push(async (text) => {
       for (let i = 0; i < text.length; i += 1200)
         await client.sendText(core.ownerId, text.slice(i, i + 1200), core.currentContext || undefined);
     });
-    if (telegram && core.telegramOwnerId) senders.push((text) => telegram.sendText(core.telegramOwnerId, text));
+    if (telegram && core.telegramOwnerId) senders.push((text) => telegram.sendText(core.telegramOwnerId, text, { approvalId }));
     await deliverToChats(message, senders);
   }
 });
@@ -100,7 +106,7 @@ const server = createServer(async (request, response) => {
     }
     if (url.pathname === '/cancel') {
       const pending = core.pending.get(data.id);
-      if (pending?.worker === worker) core.pending.delete(data.id);
+      if (pending?.worker === worker) core.cancelApproval(data.id);
       return json(response, 200, { ok: true });
     }
     if (url.pathname === '/result') {

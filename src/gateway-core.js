@@ -2,8 +2,10 @@ import { code, describeRequest, parseCommand } from './common.js';
 
 export class GatewayCore {
   constructor({ send, saveOwner, saveTelegramOwner = async () => {}, saveContext = async () => {}, ownerId = null,
-    telegramOwnerId = null, pairCode, telegramPairCode = null, ttlMs = 300000, workerNames = {}, initialContext = null }) {
+    telegramOwnerId = null, pairCode, telegramPairCode = null, ttlMs = 300000, workerNames = {}, initialContext = null,
+    onApprovalSettled = async () => {} }) {
     this.send = send;
+    this.onApprovalSettled = onApprovalSettled;
     this.saveOwner = saveOwner;
     this.saveTelegramOwner = saveTelegramOwner;
     this.saveContext = saveContext;
@@ -70,32 +72,32 @@ export class GatewayCore {
     }
     if (command.type === 'decision' || command.type === 'answer') {
       const pending = this.pending.get(command.id);
-      if (!pending) { await this.send('审批编号不存在或已过期。'); return; }
+      if (!pending) { await this.send('审批编号不存在或已过期。'); return '审批已处理或过期。'; }
       if (pending.expires <= Date.now()) {
         if (pending.kind === 'local') this.cancelLocalApproval(command.id, '远程审批超时，操作已拒绝');
-        else this.pending.delete(command.id);
+        else this.cancelApproval(command.id);
         await this.send('审批已过期，操作未执行。');
-        return;
+        return '审批已过期。';
       }
       if (pending.kind === 'local') {
         if (command.type === 'answer') {
-          await this.send('这条 VS Code 审批只接受批准或拒绝。'); return;
+          await this.send('这条 VS Code 审批只接受批准或拒绝。'); return '请批准或拒绝。';
         }
-        this.pending.delete(command.id);
+        this.cancelApproval(command.id);
         pending.resolve({ allow: command.allow });
         await this.send(`已提交 ${command.id}。`);
-        return;
+        return command.allow ? '已批准。' : '已拒绝。';
       }
       if (command.type === 'answer' && pending.tool !== 'AskUserQuestion') {
-        await this.send('这条审批不需要回答，请发送批准或拒绝。'); return;
+        await this.send('这条审批不需要回答，请发送批准或拒绝。'); return '请批准或拒绝。';
       }
       if (command.type === 'decision' && command.allow && pending.tool === 'AskUserQuestion') {
-        await this.send('请用「答 编号 选项序号」回答问题，或拒绝。'); return;
+        await this.send('请用「答 编号 选项序号」回答问题，或拒绝。'); return '请回答选项或拒绝。';
       }
-      this.pending.delete(command.id);
+      this.cancelApproval(command.id);
       this.enqueue(pending.worker, { type: 'decision', id: command.id, allow: command.allow ?? true, answer: command.answer });
       await this.send(`已提交 ${command.id}。`);
-      return;
+      return command.allow === false ? '已拒绝。' : '已批准。';
     }
     if (command.type === 'status') {
       const state = (id) => Date.now() - this.online[id] < 45000 ? '在线' : '离线';
@@ -155,6 +157,13 @@ export class GatewayCore {
     else this.queues[worker].push(event);
   }
 
+  cancelApproval(id) {
+    if (!this.pending.delete(id)) return false;
+    Promise.resolve().then(() => this.onApprovalSettled(id))
+      .catch((error) => console.error('Clear Telegram approval:', error.message));
+    return true;
+  }
+
   async next(worker, busy) {
     this.online[worker] = Date.now();
     const queue = this.queues[worker];
@@ -177,8 +186,9 @@ export class GatewayCore {
     while (this.pending.has(id)) id = code();
     this.pending.set(id, { worker, tool, input, expires: Date.now() + this.ttlMs });
     const action = tool === 'AskUserQuestion' ? `答 ${id} 选项序号` : `批准 ${id} / 拒绝 ${id}`;
-    try { await this.send(`${this.label(worker)}请求 ${id}\n${detail}\n\n${action}`); }
-    catch (error) { this.pending.delete(id); throw error; }
+    try { await this.send(`${this.label(worker)}请求 ${id}\n${detail}\n\n${action}`,
+      { approvalId: tool === 'AskUserQuestion' ? undefined : id }); }
+    catch (error) { this.cancelApproval(id); throw error; }
     return { id };
   }
 
@@ -198,7 +208,7 @@ export class GatewayCore {
     });
     const label = `${this.label(worker)} VS Code${session ? ` · 会话 ${session}` : ''}`;
     try {
-      await this.send(`${label} 请求 ${id}\n${detail}\n\n批准 ${id} / 拒绝 ${id}`);
+      await this.send(`${label} 请求 ${id}\n${detail}\n\n批准 ${id} / 拒绝 ${id}`, { approvalId: id });
     } catch (error) {
       this.cancelLocalApproval(id, '消息发送失败');
       throw error;
@@ -209,7 +219,7 @@ export class GatewayCore {
   cancelLocalApproval(id, reason = '本机审批已结束') {
     const pending = this.pending.get(id);
     if (pending?.kind !== 'local') return false;
-    this.pending.delete(id);
+    this.cancelApproval(id);
     pending.resolve({ allow: false, reason });
     return true;
   }

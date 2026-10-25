@@ -148,6 +148,35 @@ test('Telegram binding shares tasks and first approval decision with WeChat', as
   assert.match(sent.at(-1), /不存在或已过期/);
 });
 
+test('approval buttons use the same one-time decision as text on both channels', async () => {
+  const sent = [];
+  const settled = [];
+  const core = new GatewayCore({ ownerId: 'wechat-owner', telegramOwnerId: 'tg-owner',
+    send: async (text, options) => sent.push({ text, options }),
+    onApprovalSettled: async (id) => settled.push(id) });
+  const first = await core.requestApproval('a', 'Bash', { command: 'pwd' });
+  assert.equal(sent.at(-1).options.approvalId, first.id);
+  const result = await core.incoming({ channel: 'telegram', from_user_id: 'tg-owner',
+    message_id: '100', text: `批准 ${first.id}` });
+  assert.equal(result, '已批准。');
+  assert.deepEqual(await core.next('a', true), { type: 'decision', id: first.id, allow: true, answer: undefined });
+  await core.incoming({ from_user_id: 'wechat-owner', text: `拒绝 ${first.id}` });
+  assert.match(sent.at(-1).text, /不存在或已过期/);
+
+  const second = await core.requestLocalApproval('a', 'Write', { file_path: 'note.txt' });
+  assert.equal(sent.at(-1).options.approvalId, second.id);
+  await core.incoming({ from_user_id: 'wechat-owner', text: `拒绝 ${second.id}` });
+  assert.deepEqual(await second.decision, { allow: false });
+  assert.equal(await core.incoming({ channel: 'telegram', from_user_id: 'tg-owner',
+    message_id: '101', text: `批准 ${second.id}` }), '审批已处理或过期。');
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(settled, [first.id, second.id]);
+
+  const question = await core.requestApproval('a', 'AskUserQuestion', { questions: [] });
+  assert.equal(sent.at(-1).options.approvalId, undefined);
+  core.cancelApproval(question.id);
+});
+
 test('project commands are routed to the selected computer', async () => {
   const { core } = fixture();
   await core.incoming({ from_user_id: 'owner', text: '/b /new-project demo' });
