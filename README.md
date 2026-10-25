@@ -54,7 +54,7 @@ worker 默认使用 `C:\Users\<用户名>\Documents\ClaudeProjects` 作为项目
 
 以下命令在微信和已绑定的 Telegram 私聊中通用。两边共用当前电脑、项目、任务队列和审批状态；任一端发出的命令及其结果都会同步到两边。
 
-Claude Code 的任务结果在 Telegram 中按 Markdown 显示；微信仍接收原始文字。若 Telegram 拒绝某条富文本消息，网关会改用纯文本发送，避免丢失回复。
+Claude Code 的任务结果在 Telegram 中按 Markdown 显示，标题行以普通字号加粗；微信仍接收原始文字。若 Telegram 拒绝某条富文本消息，网关会改用纯文本发送，避免丢失回复。
 
 Telegram 私聊的菜单按钮会列出常用 `/` 命令。菜单使用下划线形式的项目命令，原来的连字符形式仍可在聊天中使用。未绑定时菜单只显示 `/bind`。
 
@@ -105,9 +105,9 @@ E:\code\notes
 
 ### VS Code 中的 Claude Code 审批
 
-家电脑的用户级 `PermissionRequest` 钩子可将 VS Code 会话的工具权限请求发送到已绑定的微信和 Telegram 对话。消息会写明“VS Code”、会话短编号、工具及输入，并带一次性审批编号；在任一端回复 `批准 编号` 或 `拒绝 编号` 后，决定返回等待中的 VS Code 会话。该钩子是同步的，最多等待 5 分钟；超时会拒绝。网关不可用或输入超过 8000 字符时，仍由本机 Claude Code 权限界面处理。此功能不会自动允许任何工具，也不会赋予永久权限。桥接 worker 的审批保持原有流程。
+家电脑的用户级 `PermissionRequest` 钩子可将 VS Code 会话的工具权限请求发送到已绑定的微信和 Telegram 对话。消息会写明“VS Code”、会话标题（若 Claude Code 已生成）和短编号、工具及输入，并带一次性审批编号；在任一端回复 `批准 编号` 或 `拒绝 编号` 后，决定返回等待中的 VS Code 会话。该钩子是同步的，最多等待 5 分钟；超时会拒绝。网关不可用或输入超过 8000 字符时，仍由本机 Claude Code 权限界面处理。此功能不会自动允许任何工具，也不会赋予永久权限。桥接 worker 的审批保持原有流程。
 
-这只处理 Claude Code 的工具权限。`AskUserQuestion`、`ExitPlanMode`、Windows UAC 和浏览器登录等界面操作仍需在本机完成；对应的微信提醒继续发送。用户级钩子配置和桥接凭证仅保存在本机，不应复制到公开仓库。
+这只处理 Claude Code 的工具权限。`AskUserQuestion`、`ExitPlanMode`、Windows UAC 和浏览器登录等界面操作仍需在本机完成；对应的微信提醒继续发送。`hooks/` 保存可复用的钩子源码及测试；用户级钩子配置和桥接凭证仅保存在本机，不应复制到公开仓库。Telegram 通知也会显示可用的会话标题，取不到时显示短编号。
 
 ## 范围与限制
 

@@ -389,7 +389,7 @@ export class GatewayCore {
     return { id };
   }
 
-  async requestLocalApproval(worker, tool, input, session = '') {
+  async requestLocalApproval(worker, tool, input, session = '', sessionTitle = '') {
     const detail = describeRequest(tool, input);
     if (!detail) return { error: 'Operation too large to review in chat' };
     let id = code();
@@ -403,7 +403,10 @@ export class GatewayCore {
       kind: 'local', worker, tool, expires: Date.now() + this.ttlMs,
       resolve: (result) => { clearTimeout(timer); resolveDecision(result); }
     });
-    const label = `${this.label(worker)} VS Code${session ? ` · 会话 ${session}` : ''}`;
+    const cleanTitle = String(sessionTitle).replace(/[\r\n\t`\\]/g, ' ').trim().slice(0, 80);
+    const context = cleanTitle ? ` · 会话 ${cleanTitle}${session ? ` (${session})` : ''}`
+      : session ? ` · 会话 ${session}` : '';
+    const label = `${this.label(worker)} VS Code${context}`;
     try {
       await this.send(`${label} 请求 ${id}\n${detail}\n\n批准 ${id} / 拒绝 ${id}`, { approvalId: id });
     } catch (error) {

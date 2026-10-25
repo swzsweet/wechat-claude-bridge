@@ -150,7 +150,9 @@ const server = createServer(async (request, response) => {
       if (typeof data.tool !== 'string' || data.tool.length > 100 || !data.input || typeof data.input !== 'object' || Array.isArray(data.input))
         return json(response, 400, { error: 'Invalid approval' });
       const session = typeof data.session === 'string' ? data.session.replace(/[^a-zA-Z0-9-]/g, '').slice(0, 8) : '';
-      const approval = await core.requestLocalApproval(worker, data.tool, data.input, session);
+      const sessionTitle = typeof data.sessionTitle === 'string' && data.sessionTitle.length <= 100
+        ? data.sessionTitle : '';
+      const approval = await core.requestLocalApproval(worker, data.tool, data.input, session, sessionTitle);
       if (approval.error) return json(response, 422, { error: approval.error });
       response.on('close', () => core.cancelLocalApproval(approval.id, '本机会话已关闭'));
       const decision = await approval.decision;
@@ -169,6 +171,8 @@ const server = createServer(async (request, response) => {
         typeof notice.title === 'string' && notice.title.length <= 100 &&
         typeof notice.project === 'string' && notice.project.length <= 100 &&
         typeof notice.session === 'string' && notice.session.length <= 50 &&
+        (notice.sessionTitle === undefined ||
+          (typeof notice.sessionTitle === 'string' && notice.sessionTitle.length <= 100)) &&
         typeof notice.body === 'string' && notice.body.length <= 12000 ? notice : null;
       await core.result(worker, data.text.slice(0, 12000), formatted);
       return json(response, 200, { ok: true });

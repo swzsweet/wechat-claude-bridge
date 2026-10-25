@@ -1,6 +1,7 @@
 import { readFile, writeFile, mkdir } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { sleep } from './common.js';
+import { normalSizeHeadings } from './telegram-format.js';
 
 export const validTelegramToken = (token) => /^\d+:[A-Za-z0-9_-]+$/.test(token);
 
@@ -162,7 +163,7 @@ export class TelegramTextClient {
   }
 
   async sendMarkdown(chatId, text, fallbackText = text, { replyToMessageId } = {}) {
-    const markdown = text.replace(/^([^\n]+：\n\[[^\]\n]+\]) /u, '$1\n\n');
+    const markdown = normalSizeHeadings(text.replace(/^([^\n]+：\n\[[^\]\n]+\]) /u, '$1\n\n'));
     if (Buffer.byteLength(markdown, 'utf8') > 30000)
       return this.sendText(chatId, fallbackText, { replyToMessageId });
     try {

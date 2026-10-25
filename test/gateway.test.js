@@ -56,6 +56,15 @@ test('VS Code approval waits for the bound owner and resolves only once', async 
   assert.match(sent.at(-1), /不存在或已过期/);
 });
 
+test('VS Code approval includes the conversation title when available', async () => {
+  const { core, sent } = fixture();
+  const { id, decision } = await core.requestLocalApproval('a', 'Bash', { command: 'pwd' },
+    '841b4c87', '仓储系统检查');
+  assert.match(sent.at(-1), new RegExp(`VS Code · 会话 仓储系统检查 \\(841b4c87\\) 请求 ${id}`));
+  await core.incoming({ from_user_id: 'owner', text: `拒绝 ${id}` });
+  assert.deepEqual(await decision, { allow: false });
+});
+
 test('VS Code approval rejects answers and handles deny, expiry, and cancellation', async () => {
   const { core, sent } = fixture();
   const first = await core.requestLocalApproval('a', 'Write', { file_path: 'a.txt' });
@@ -139,9 +148,20 @@ test('structured Claude notice has a separate Telegram layout without changing W
     session: '841b4c87', body });
   assert.equal(sent[0].text, `家电脑：\n${original}`);
   assert.match(sent[0].options.telegramMarkdown,
-    /^## 本轮结果与下一步\n\n`家电脑` · `仓储系统` · `Claude Code`\n会话 `841b4c87`/);
+    /^\*\*本轮结果与下一步\*\*\n\n`家电脑` · `仓储系统` · `Claude Code`\n会话 `841b4c87`/);
   assert.match(sent[0].options.telegramMarkdown, /\n\n# 检查结果\n\n- 已完成测试/);
   assert.ok(!sent[0].options.telegramMarkdown.includes('项目：仓储系统 · 会话'));
+});
+
+test('Telegram notice shows the conversation title and retains its short ID', async () => {
+  const sent = [];
+  const core = new GatewayCore({ ownerId: 'owner', workerNames: { a: '家电脑' },
+    send: async (text, options) => sent.push({ text, options }) });
+  const original = 'Claude Code · 本轮结果与下一步\n项目：仓储系统 · 会话 841b4c87\n\n完成';
+  await core.result('a', original, { title: '本轮结果与下一步', project: '仓储系统',
+    session: '841b4c87', sessionTitle: '库存检查 `修复`', body: '完成' });
+  assert.equal(sent[0].text, `家电脑：\n${original}`);
+  assert.match(sent[0].options.telegramMarkdown, /会话 `库存检查  修复` · ID `841b4c87`/);
 });
 
 test('only the bound owner updates the saved WeChat context', async () => {

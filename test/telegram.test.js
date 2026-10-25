@@ -1,6 +1,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { TelegramTextClient, telegramMessage, telegramApprovalCallback, telegramCommands, validTelegramToken } from '../src/telegram.js';
+import { normalSizeHeadings } from '../src/telegram-format.js';
+
+test('Telegram headings use bold normal-sized text outside code fences', () => {
+  const source = '# 结果\n\n## **已完成** ##\n\n```md\n# 保留代码\n```\n\n~~~md\n## 仍是代码\n~~~';
+  assert.equal(normalSizeHeadings(source),
+    '**结果**\n\n**已完成**\n\n```md\n# 保留代码\n```\n\n~~~md\n## 仍是代码\n~~~');
+});
 
 test('Bot Token format rejects pasted shell commands', () => {
   assert.equal(validTelegramToken('123456:Ab_cd-Ef'), true);
@@ -91,9 +98,9 @@ test('Claude Markdown uses Telegram rich messages and falls back if rejected', a
   const markdown = '# Plan\n\n**Important** item\n\n```js\nconsole.log(1)\n```';
   await client.sendMarkdown('123', markdown);
   assert.deepEqual(calls, [{ method: 'sendRichMessage',
-    data: { chat_id: '123', rich_message: { markdown } } }]);
+    data: { chat_id: '123', rich_message: { markdown: markdown.replace('# Plan', '**Plan**') } } }]);
   await client.sendMarkdown('123', '家电脑：\n[仓储系统] # 计划\n\n**重点**');
-  assert.equal(calls.at(-1).data.rich_message.markdown, '家电脑：\n[仓储系统]\n\n# 计划\n\n**重点**');
+  assert.equal(calls.at(-1).data.rich_message.markdown, '家电脑：\n[仓储系统]\n\n**计划**\n\n**重点**');
   rejectRich = true;
   await client.sendMarkdown('123', markdown);
   assert.deepEqual(calls.slice(2).map(({ method }) => method), ['sendRichMessage', 'sendMessage']);
