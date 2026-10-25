@@ -80,9 +80,10 @@ export class TelegramTextClient {
   }
 
   async sendMarkdown(chatId, text) {
-    if (Buffer.byteLength(text, 'utf8') > 30000) return this.sendText(chatId, text);
+    const markdown = text.replace(/^([^\n]+：\n\[[^\]\n]+\]) /u, '$1\n\n');
+    if (Buffer.byteLength(markdown, 'utf8') > 30000) return this.sendText(chatId, text);
     try {
-      await this.call('sendRichMessage', { chat_id: chatId, rich_message: { markdown: text } });
+      await this.call('sendRichMessage', { chat_id: chatId, rich_message: { markdown } });
     } catch (error) {
       console.error('Telegram Markdown:', error.message);
       await this.sendText(chatId, text);

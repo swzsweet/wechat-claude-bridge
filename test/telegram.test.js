@@ -51,9 +51,11 @@ test('Claude Markdown uses Telegram rich messages and falls back if rejected', a
   await client.sendMarkdown('123', markdown);
   assert.deepEqual(calls, [{ method: 'sendRichMessage',
     data: { chat_id: '123', rich_message: { markdown } } }]);
+  await client.sendMarkdown('123', '家电脑：\n[仓储系统] # 计划\n\n**重点**');
+  assert.equal(calls.at(-1).data.rich_message.markdown, '家电脑：\n[仓储系统]\n\n# 计划\n\n**重点**');
   rejectRich = true;
   await client.sendMarkdown('123', markdown);
-  assert.deepEqual(calls.slice(1).map(({ method }) => method), ['sendRichMessage', 'sendMessage']);
+  assert.deepEqual(calls.slice(2).map(({ method }) => method), ['sendRichMessage', 'sendMessage']);
   assert.equal(calls.at(-1).data.text, markdown);
 });
 
