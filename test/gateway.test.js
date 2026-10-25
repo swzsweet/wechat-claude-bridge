@@ -105,6 +105,21 @@ test('worker result is marked as Markdown for Telegram delivery', async () => {
   assert.deepEqual(sent, [{ text: '电脑 A：\n[demo] **done**', options: { markdown: true } }]);
 });
 
+test('structured Claude notice has a separate Telegram layout without changing WeChat text', async () => {
+  const sent = [];
+  const core = new GatewayCore({ ownerId: 'owner', workerNames: { a: '家电脑' },
+    send: async (text, options) => sent.push({ text, options }) });
+  const body = '# 检查结果\n\n- 已完成测试\n- **尚未部署**';
+  const original = `Claude Code · 本轮结果与下一步\n项目：仓储系统 · 会话 841b4c87\n\n${body}`;
+  await core.result('a', original, { title: '本轮结果与下一步', project: '仓储系统',
+    session: '841b4c87', body });
+  assert.equal(sent[0].text, `家电脑：\n${original}`);
+  assert.match(sent[0].options.telegramMarkdown,
+    /^## 本轮结果与下一步\n\n`家电脑` · `仓储系统` · `Claude Code`\n会话 `841b4c87`/);
+  assert.match(sent[0].options.telegramMarkdown, /\n\n# 检查结果\n\n- 已完成测试/);
+  assert.ok(!sent[0].options.telegramMarkdown.includes('项目：仓储系统 · 会话'));
+});
+
 test('only the bound owner updates the saved WeChat context', async () => {
   const contexts = [];
   const core = new GatewayCore({

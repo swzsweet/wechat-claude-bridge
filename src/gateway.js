@@ -60,7 +60,7 @@ const core = new GatewayCore({
   saveOwner: async (ownerId) => saveJson(stateFile, { ownerId, telegramOwnerId: core.telegramOwnerId }),
   saveTelegramOwner: async (telegramOwnerId) => saveJson(stateFile, { ownerId: core.ownerId, telegramOwnerId }),
   onApprovalSettled: async (id) => telegram?.clearApproval(id),
-  send: async (message, { approvalId, markdown, progressTaskId, keyboard } = {}) => {
+  send: async (message, { approvalId, markdown, telegramMarkdown, progressTaskId, keyboard } = {}) => {
     const senders = [];
     if (core.ownerId) senders.push(async (text) => {
       for (let i = 0; i < text.length; i += 1200)
@@ -68,7 +68,7 @@ const core = new GatewayCore({
     });
     if (telegram && core.telegramOwnerId) senders.push((text) => progressTaskId
       ? telegram.sendProgress(core.telegramOwnerId, progressTaskId, text)
-      : markdown ? telegram.sendMarkdown(core.telegramOwnerId, text)
+      : markdown ? telegram.sendMarkdown(core.telegramOwnerId, telegramMarkdown || text, text)
         : telegram.sendText(core.telegramOwnerId, text, { approvalId, keyboard }));
     await deliverToChats(message, senders);
   }
@@ -163,7 +163,13 @@ const server = createServer(async (request, response) => {
     }
     if (url.pathname === '/result') {
       if (typeof data.text !== 'string') return json(response, 400, { error: 'Invalid result' });
-      await core.result(worker, data.text.slice(0, 12000));
+      const notice = data.notification;
+      const formatted = notice && typeof notice === 'object' && !Array.isArray(notice) &&
+        typeof notice.title === 'string' && notice.title.length <= 100 &&
+        typeof notice.project === 'string' && notice.project.length <= 100 &&
+        typeof notice.session === 'string' && notice.session.length <= 50 &&
+        typeof notice.body === 'string' && notice.body.length <= 12000 ? notice : null;
+      await core.result(worker, data.text.slice(0, 12000), formatted);
       return json(response, 200, { ok: true });
     }
     if (url.pathname === '/task-progress') {

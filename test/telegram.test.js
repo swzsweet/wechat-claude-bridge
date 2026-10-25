@@ -57,6 +57,8 @@ test('Claude Markdown uses Telegram rich messages and falls back if rejected', a
   await client.sendMarkdown('123', markdown);
   assert.deepEqual(calls.slice(2).map(({ method }) => method), ['sendRichMessage', 'sendMessage']);
   assert.equal(calls.at(-1).data.text, markdown);
+  await client.sendMarkdown('123', '## 结果\n\n**完成**', '结果：完成');
+  assert.equal(calls.at(-1).data.text, '结果：完成');
 });
 
 test('Telegram approval buttons belong to a private message from the bot', async () => {

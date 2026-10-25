@@ -118,14 +118,14 @@ export class TelegramTextClient {
     if (this.progressMessages.size > 100) this.progressMessages.delete(this.progressMessages.keys().next().value);
   }
 
-  async sendMarkdown(chatId, text) {
+  async sendMarkdown(chatId, text, fallbackText = text) {
     const markdown = text.replace(/^([^\n]+：\n\[[^\]\n]+\]) /u, '$1\n\n');
-    if (Buffer.byteLength(markdown, 'utf8') > 30000) return this.sendText(chatId, text);
+    if (Buffer.byteLength(markdown, 'utf8') > 30000) return this.sendText(chatId, fallbackText);
     try {
       await this.call('sendRichMessage', { chat_id: chatId, rich_message: { markdown } });
     } catch (error) {
       console.error('Telegram Markdown:', error.message);
-      await this.sendText(chatId, text);
+      await this.sendText(chatId, fallbackText);
     }
   }
 

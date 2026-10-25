@@ -1,5 +1,6 @@
 import { code, describeRequest, parseCommand } from './common.js';
 import { TaskStore } from './task-store.js';
+import { formatTelegramNotification } from './telegram-format.js';
 
 export class GatewayCore {
   constructor({ send, saveOwner, saveTelegramOwner = async () => {}, saveContext = async () => {}, ownerId = null,
@@ -411,5 +412,10 @@ export class GatewayCore {
     return true;
   }
 
-  async result(worker, text) { await this.send(`${this.label(worker)}：\n${text}`, { markdown: true }); }
+  async result(worker, text, notification = null) {
+    await this.send(`${this.label(worker)}：\n${text}`, {
+      markdown: true,
+      ...(notification ? { telegramMarkdown: formatTelegramNotification(this.label(worker), notification) } : {})
+    });
+  }
 }
