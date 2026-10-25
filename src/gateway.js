@@ -6,7 +6,7 @@ import { WeChatTextClient } from './wechat.js';
 import { TelegramTextClient } from './telegram.js';
 import { GatewayCore } from './gateway-core.js';
 import { deliverToChats } from './chat-delivery.js';
-import { bridgeToken, equalSecret, readJson, saveJson } from './common.js';
+import { bridgeToken, equalSecret, readJson, saveJson, sleep } from './common.js';
 
 const dataDir = resolve(process.env.BRIDGE_DATA || 'data');
 const token = await bridgeToken(dataDir, true);
@@ -31,7 +31,6 @@ const client = new WeChatTextClient({ credentialFile, cursorFile: syncFile, onMe
 const telegram = telegramToken ? new TelegramTextClient({
   token: telegramToken, cursorFile: resolve(dataDir, 'telegram-offset.txt'), onMessage: (msg) => core.incoming(msg)
 }) : null;
-await client.login();
 
 const pairCode = randomBytes(6).toString('hex').toUpperCase();
 const telegramPairCode = telegram && !state.telegramOwnerId ? randomBytes(6).toString('hex').toUpperCase() : null;
@@ -114,4 +113,16 @@ const server = createServer(async (request, response) => {
 });
 
 server.listen(port, host, () => console.log(`Gateway listening on ${host}:${port}`));
-await Promise.all([client.start(), ...(telegram ? [telegram.start()] : [])]);
+async function keepWechatRunning() {
+  while (true) {
+    try {
+      await client.login();
+      await client.start();
+    } catch (error) {
+      console.error('WeChat channel:', error.message);
+      await sleep(30000);
+    }
+  }
+}
+
+await Promise.all([keepWechatRunning(), ...(telegram ? [telegram.start()] : [])]);
