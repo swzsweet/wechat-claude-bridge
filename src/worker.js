@@ -79,6 +79,7 @@ async function run(prompt) {
     const cwd = await projectPath(root, project.path, isAbsolute(project.path));
     const options = {
       cwd,
+      env: { ...process.env, WECHAT_BRIDGE_WORKER: '1' },
       permissionMode: 'default',
       canUseTool: approve,
       hooks: { PreToolUse: [{ matcher: 'Bash|Write|Edit|MultiEdit|NotebookEdit', hooks: [requireRemoteApproval], timeout: 310 }] },

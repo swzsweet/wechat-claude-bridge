@@ -1,9 +1,10 @@
 import { code, describeRequest, parseCommand } from './common.js';
 
 export class GatewayCore {
-  constructor({ send, saveOwner, ownerId = null, pairCode, ttlMs = 300000, workerNames = {} }) {
+  constructor({ send, saveOwner, saveContext = async () => {}, ownerId = null, pairCode, ttlMs = 300000, workerNames = {}, initialContext = null }) {
     this.send = send;
     this.saveOwner = saveOwner;
+    this.saveContext = saveContext;
     this.ownerId = ownerId;
     this.pairCode = pairCode;
     this.ttlMs = ttlMs;
@@ -13,7 +14,7 @@ export class GatewayCore {
     this.waiters = { a: null, b: null };
     this.pending = new Map();
     this.online = { a: 0, b: 0 };
-    this.currentContext = null;
+    this.currentContext = initialContext;
     this.seen = new Set();
     this.awaitingProjects = null;
   }
@@ -33,15 +34,16 @@ export class GatewayCore {
       this.seen.add(dedupe);
       if (this.seen.size > 1000) this.seen.delete(this.seen.values().next().value);
     }
-    this.currentContext = msg.context_token || this.currentContext;
     if (!this.ownerId) {
       if (text !== `/绑定 ${this.pairCode}`) return;
       this.ownerId = from;
       await this.saveOwner(from);
+      await this.updateContext(msg.context_token);
       await this.send('绑定成功。发送 /a 或 /b 选择电脑，/status 查看连接。');
       return;
     }
     if (from !== this.ownerId) return;
+    await this.updateContext(msg.context_token);
     let command = parseCommand(text);
     if (command.type === 'route') {
       this.route = command.worker;
@@ -52,8 +54,18 @@ export class GatewayCore {
       const pending = this.pending.get(command.id);
       if (!pending) { await this.send('审批编号不存在或已过期。'); return; }
       if (pending.expires <= Date.now()) {
-        this.pending.delete(command.id);
+        if (pending.kind === 'local') this.cancelLocalApproval(command.id, '微信审批超时，操作已拒绝');
+        else this.pending.delete(command.id);
         await this.send('审批已过期，操作未执行。');
+        return;
+      }
+      if (pending.kind === 'local') {
+        if (command.type === 'answer') {
+          await this.send('这条 VS Code 审批只接受批准或拒绝。'); return;
+        }
+        this.pending.delete(command.id);
+        pending.resolve({ allow: command.allow });
+        await this.send(`已提交 ${command.id}。`);
         return;
       }
       if (command.type === 'answer' && pending.tool !== 'AskUserQuestion') {
@@ -108,6 +120,12 @@ export class GatewayCore {
     await this.send(`已发送到${this.label(worker)}。`);
   }
 
+  async updateContext(token) {
+    if (!token || token === this.currentContext) return;
+    this.currentContext = token;
+    await this.saveContext(token);
+  }
+
   enqueue(worker, event) {
     const waiter = this.waiters[worker];
     if (waiter) { this.waiters[worker] = null; waiter(event); }
@@ -139,6 +157,38 @@ export class GatewayCore {
     try { await this.send(`${this.label(worker)}请求 ${id}\n${detail}\n\n${action}`); }
     catch (error) { this.pending.delete(id); throw error; }
     return { id };
+  }
+
+  async requestLocalApproval(worker, tool, input, session = '') {
+    const detail = describeRequest(tool, input);
+    if (!detail) return { error: 'Operation too large to review in WeChat' };
+    let id = code();
+    while (this.pending.has(id)) id = code();
+    let resolveDecision;
+    const decision = new Promise((resolve) => { resolveDecision = resolve; });
+    const timer = setTimeout(() => {
+      this.cancelLocalApproval(id, '微信审批超时，操作已拒绝');
+    }, this.ttlMs);
+    this.pending.set(id, {
+      kind: 'local', worker, tool, expires: Date.now() + this.ttlMs,
+      resolve: (result) => { clearTimeout(timer); resolveDecision(result); }
+    });
+    const label = `${this.label(worker)} VS Code${session ? ` · 会话 ${session}` : ''}`;
+    try {
+      await this.send(`${label} 请求 ${id}\n${detail}\n\n批准 ${id} / 拒绝 ${id}`);
+    } catch (error) {
+      this.cancelLocalApproval(id, '微信发送失败');
+      throw error;
+    }
+    return { id, decision };
+  }
+
+  cancelLocalApproval(id, reason = '本机审批已结束') {
+    const pending = this.pending.get(id);
+    if (pending?.kind !== 'local') return false;
+    this.pending.delete(id);
+    pending.resolve({ allow: false, reason });
+    return true;
   }
 
   async result(worker, text) { await this.send(`${this.label(worker)}：\n${text}`); }

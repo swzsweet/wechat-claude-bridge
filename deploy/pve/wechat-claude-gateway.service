@@ -1,0 +1,22 @@
+[Unit]
+Description=WeChat Claude bridge gateway
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=wechatbridge
+Group=wechatbridge
+WorkingDirectory=/opt/wechat-claude-bridge/current
+EnvironmentFile=/etc/wechat-claude-bridge.env
+ExecStart=/opt/wechat-claude-bridge/node/bin/node src/gateway.js
+Restart=always
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/wechat-claude-bridge
+
+[Install]
+WantedBy=multi-user.target

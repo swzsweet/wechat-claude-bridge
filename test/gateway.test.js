@@ -42,6 +42,46 @@ test('overlong approval is denied before sending to WeChat', async () => {
   assert.equal(sent.length, 0);
 });
 
+test('VS Code approval waits for the bound owner and resolves only once', async () => {
+  const { core, sent } = fixture();
+  const { id, decision } = await core.requestLocalApproval('a', 'Bash', { command: 'pwd' }, 'session1');
+  assert.match(sent.at(-1), new RegExp(`VS Code · 会话 session1 请求 ${id}`));
+  await core.incoming({ from_user_id: 'other', text: `批准 ${id}` });
+  assert.equal(core.pending.has(id), true);
+  await core.incoming({ from_user_id: 'owner', text: `批准 ${id}` });
+  assert.deepEqual(await decision, { allow: true });
+  assert.equal(core.pending.has(id), false);
+  await core.incoming({ from_user_id: 'owner', text: `批准 ${id}` });
+  assert.match(sent.at(-1), /不存在或已过期/);
+});
+
+test('VS Code approval rejects answers and handles deny, expiry, and cancellation', async () => {
+  const { core, sent } = fixture();
+  const first = await core.requestLocalApproval('a', 'Write', { file_path: 'a.txt' });
+  await core.incoming({ from_user_id: 'owner', text: `答 ${first.id} 1` });
+  assert.match(sent.at(-1), /只接受批准或拒绝/);
+  await core.incoming({ from_user_id: 'owner', text: `拒绝 ${first.id}` });
+  assert.deepEqual(await first.decision, { allow: false });
+
+  const second = await core.requestLocalApproval('a', 'Bash', { command: 'pwd' });
+  core.pending.get(second.id).expires = Date.now() - 1;
+  await core.incoming({ from_user_id: 'owner', text: `批准 ${second.id}` });
+  assert.deepEqual(await second.decision, { allow: false, reason: '微信审批超时，操作已拒绝' });
+
+  const third = await core.requestLocalApproval('a', 'Bash', { command: 'pwd' });
+  assert.equal(core.cancelLocalApproval(third.id), true);
+  assert.deepEqual(await third.decision, { allow: false, reason: '本机审批已结束' });
+});
+
+test('failed or oversized VS Code approval does not leave a pending decision', async () => {
+  const { core } = fixture();
+  assert.ok((await core.requestLocalApproval('a', 'Write', { content: 'x'.repeat(9000) })).error);
+  const failing = new GatewayCore({ ownerId: 'owner', pairCode: 'PAIR', saveOwner: async () => {},
+    send: async () => { throw new Error('offline'); }, ttlMs: 1000 });
+  await assert.rejects(() => failing.requestLocalApproval('a', 'Bash', { command: 'pwd' }), /offline/);
+  assert.equal(failing.pending.size, 0);
+});
+
 test('custom computer name appears in replies while /a remains the route', async () => {
   const sent = [];
   const core = new GatewayCore({
@@ -56,6 +96,20 @@ test('custom computer name appears in replies while /a remains the route', async
   assert.equal(sent.at(-1), '家电脑：\n[default] OK');
   const { id } = await core.requestApproval('a', 'Bash', { command: 'pwd' });
   assert.match(sent.at(-1), new RegExp(`^家电脑请求 ${id}`));
+});
+
+test('only the bound owner updates the saved WeChat context', async () => {
+  const contexts = [];
+  const core = new GatewayCore({
+    ownerId: 'owner', pairCode: 'PAIR', initialContext: 'previous',
+    saveOwner: async () => {}, saveContext: async (token) => contexts.push(token),
+    send: async () => {}
+  });
+  await core.incoming({ from_user_id: 'other', text: '/status', context_token: 'untrusted' });
+  assert.equal(core.currentContext, 'previous');
+  await core.incoming({ from_user_id: 'owner', text: '/status', context_token: 'current' });
+  assert.equal(core.currentContext, 'current');
+  assert.deepEqual(contexts, ['current']);
 });
 
 test('project commands are routed to the selected computer', async () => {
