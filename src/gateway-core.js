@@ -1,12 +1,13 @@
 import { code, describeRequest, parseCommand } from './common.js';
 
 export class GatewayCore {
-  constructor({ send, saveOwner, ownerId = null, pairCode, ttlMs = 300000 }) {
+  constructor({ send, saveOwner, ownerId = null, pairCode, ttlMs = 300000, workerNames = {} }) {
     this.send = send;
     this.saveOwner = saveOwner;
     this.ownerId = ownerId;
     this.pairCode = pairCode;
     this.ttlMs = ttlMs;
+    this.workerNames = workerNames;
     this.route = 'a';
     this.queues = { a: [], b: [] };
     this.waiters = { a: null, b: null };
@@ -15,6 +16,11 @@ export class GatewayCore {
     this.currentContext = null;
     this.seen = new Set();
     this.awaitingProjects = null;
+  }
+
+  label(worker) {
+    const name = this.workerNames[worker];
+    return typeof name === 'string' && name.trim() ? name.trim() : `电脑 ${worker.toUpperCase()}`;
   }
 
   async incoming(msg) {
@@ -39,7 +45,7 @@ export class GatewayCore {
     let command = parseCommand(text);
     if (command.type === 'route') {
       this.route = command.worker;
-      if (!command.prompt) { await this.send(`已切换到电脑 ${this.route.toUpperCase()}。`); return; }
+      if (!command.prompt) { await this.send(`已切换到${this.label(this.route)}。`); return; }
       command = parseCommand(command.prompt);
     }
     if (command.type === 'decision' || command.type === 'answer') {
@@ -63,7 +69,7 @@ export class GatewayCore {
     }
     if (command.type === 'status') {
       const state = (id) => Date.now() - this.online[id] < 45000 ? '在线' : '离线';
-      await this.send(`当前：${this.route.toUpperCase()}。A ${state('a')}，B ${state('b')}。`);
+      await this.send(`当前：${this.label(this.route)}。${this.label('a')} ${state('a')}，${this.label('b')} ${state('b')}。`);
       return;
     }
     let worker = this.route;
@@ -88,18 +94,18 @@ export class GatewayCore {
         return;
       }
       this.enqueue(worker, command);
-      await this.send(`已发送项目命令到电脑 ${worker.toUpperCase()}。`);
+      await this.send(`已发送项目命令到${this.label(worker)}。`);
       return;
     }
     if (command.type === 'new') {
       this.enqueue(worker, { type: 'new' });
-      await this.send(`电脑 ${worker.toUpperCase()} 下次将开启新会话。`);
+      await this.send(`${this.label(worker)}下次将开启新会话。`);
       return;
     }
     const prompt = command.prompt;
     if (!prompt || prompt.length > 4000) { await this.send('消息为空或超过 4000 字。'); return; }
     this.enqueue(worker, { type: 'task', prompt });
-    await this.send(`已发送到电脑 ${worker.toUpperCase()}。`);
+    await this.send(`已发送到${this.label(worker)}。`);
   }
 
   enqueue(worker, event) {
@@ -130,10 +136,10 @@ export class GatewayCore {
     while (this.pending.has(id)) id = code();
     this.pending.set(id, { worker, tool, input, expires: Date.now() + this.ttlMs });
     const action = tool === 'AskUserQuestion' ? `答 ${id} 选项序号` : `批准 ${id} / 拒绝 ${id}`;
-    try { await this.send(`电脑 ${worker.toUpperCase()} 请求 ${id}\n${detail}\n\n${action}`); }
+    try { await this.send(`${this.label(worker)}请求 ${id}\n${detail}\n\n${action}`); }
     catch (error) { this.pending.delete(id); throw error; }
     return { id };
   }
 
-  async result(worker, text) { await this.send(`电脑 ${worker.toUpperCase()}：\n${text}`); }
+  async result(worker, text) { await this.send(`${this.label(worker)}：\n${text}`); }
 }

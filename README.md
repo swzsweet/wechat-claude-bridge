@@ -25,6 +25,8 @@ npm run gateway
 
 首次启动会自动生成 32 字节密钥，保存在 `data/bridge-token.txt`；终端还会打印微信二维码。用微信扫码后，终端会打印 `/绑定` 命令；向 ClawBot 发送该命令以绑定你的微信账号。登录凭证存入 `data/wechat.json`。这两个文件都是秘密，不要分享整个 `data` 目录。微信文字收发直接实现腾讯公开的 iLink 协议字段，无额外微信 SDK 依赖。
 
+微信中显示的电脑名称可在本机 `data/computer-names.json` 中配置，例如 `{"a":"家电脑","b":"电脑 B"}`。修改后重启网关；内部 `/a`、`/b` 命令保持不变。此文件在忽略的 `data/` 目录中，不会上传到 GitHub。
+
 在 A 的第二个 PowerShell 窗口启动 worker A：
 
 ```powershell

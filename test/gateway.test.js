@@ -42,6 +42,22 @@ test('overlong approval is denied before sending to WeChat', async () => {
   assert.equal(sent.length, 0);
 });
 
+test('custom computer name appears in replies while /a remains the route', async () => {
+  const sent = [];
+  const core = new GatewayCore({
+    ownerId: 'owner', pairCode: 'PAIR', saveOwner: async () => {},
+    send: async (text) => sent.push(text), workerNames: { a: '家电脑' }
+  });
+  await core.incoming({ from_user_id: 'owner', text: '/a' });
+  assert.equal(sent.at(-1), '已切换到家电脑。');
+  await core.incoming({ from_user_id: 'owner', text: '/status' });
+  assert.match(sent.at(-1), /当前：家电脑。家电脑 离线，电脑 B 离线。/);
+  await core.result('a', '[default] OK');
+  assert.equal(sent.at(-1), '家电脑：\n[default] OK');
+  const { id } = await core.requestApproval('a', 'Bash', { command: 'pwd' });
+  assert.match(sent.at(-1), new RegExp(`^家电脑请求 ${id}`));
+});
+
 test('project commands are routed to the selected computer', async () => {
   const { core } = fixture();
   await core.incoming({ from_user_id: 'owner', text: '/b /new-project demo' });

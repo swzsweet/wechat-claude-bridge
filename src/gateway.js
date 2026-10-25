@@ -15,6 +15,7 @@ const stateFile = resolve(dataDir, 'gateway.json');
 const credentialFile = resolve(dataDir, 'wechat.json');
 const syncFile = resolve(dataDir, 'sync.txt');
 const state = await readJson(stateFile, { ownerId: null });
+const workerNames = await readJson(resolve(dataDir, 'computer-names.json'), {});
 const client = new WeChatTextClient({ credentialFile, cursorFile: syncFile, onMessage: (msg) => core.incoming(msg) });
 await client.login();
 
@@ -22,6 +23,7 @@ const pairCode = randomBytes(6).toString('hex').toUpperCase();
 if (!state.ownerId) console.log(`From your WeChat, send: /绑定 ${pairCode}`);
 const core = new GatewayCore({
   ownerId: state.ownerId,
+  workerNames,
   pairCode,
   saveOwner: async (ownerId) => saveJson(stateFile, { ownerId }),
   send: async (message) => {
