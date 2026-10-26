@@ -277,6 +277,8 @@ test('approval buttons use the same one-time decision as text on both channels',
 
   const second = await core.requestLocalApproval('a', 'Write', { file_path: 'note.txt' });
   assert.equal(sent.at(-1).options.approvalId, second.id);
+  assert.equal(sent.at(-1).options.markdown, true);
+  assert.match(sent.at(-1).options.telegramMarkdown, /\*\*Write\*\*/);
   await core.incoming({ from_user_id: 'wechat-owner', text: `拒绝 ${second.id}` });
   assert.deepEqual(await second.decision, { allow: false });
   assert.equal(await core.incoming({ channel: 'telegram', from_user_id: 'tg-owner',
@@ -287,6 +289,20 @@ test('approval buttons use the same one-time decision as text on both channels',
   const question = await core.requestApproval('a', 'AskUserQuestion', { questions: [] });
   assert.equal(sent.at(-1).options.approvalId, undefined);
   core.cancelApproval(question.id);
+});
+
+test('ExitPlanMode approval renders plan as readable Markdown', async () => {
+  const sent = [];
+  const core = new GatewayCore({ ownerId: 'wechat-owner', telegramOwnerId: 'tg-owner',
+    send: async (text, options) => sent.push({ text, options }) });
+  const { id } = await core.requestLocalApproval('a', 'ExitPlanMode',
+    { plan: '# 两步计划\n\n- 第一项\n- 第二项' }, 'abc123', '检查项目');
+  assert.match(sent[0].text, /\\n/);
+  assert.match(sent[0].options.telegramMarkdown, /\*\*两步计划\*\*|# 两步计划/);
+  assert.match(sent[0].options.telegramMarkdown, /\n- 第一项\n- 第二项/);
+  assert.doesNotMatch(sent[0].options.telegramMarkdown, /\\n/);
+  assert.equal(sent[0].options.approvalId, id);
+  core.cancelLocalApproval(id);
 });
 
 test('project commands are routed to the selected computer', async () => {

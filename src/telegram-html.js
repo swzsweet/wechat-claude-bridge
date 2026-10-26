@@ -49,3 +49,29 @@ function blocks(tokens = []) {
 export function telegramHtml(markdown) {
   return blocks(marked.lexer(markdown, { gfm: true }));
 }
+
+export function telegramHtmlChunks(markdown, limit = 3000) {
+  const html = telegramHtml(markdown);
+  const tokens = html.match(/<[^>]+>|&(?:#\d+|#x[\da-f]+|[a-z]+);|[\s\S]/giu) || [];
+  const chunks = [];
+  let open = [];
+  let chunk = '';
+  for (const token of tokens) {
+    const next = [...open];
+    const closing = /^<\/(b|i|s|code|pre|a)>$/i.exec(token);
+    const opening = /^<(b|i|s|code|pre|a)(?:\s[^>]*)?>$/i.exec(token);
+    if (closing) next.pop();
+    else if (opening) next.push({ tag: opening[1], html: token });
+    const suffix = next.slice().reverse().map(({ tag }) => `</${tag}>`).join('');
+    if (chunk && chunk.length + token.length + suffix.length > limit) {
+      chunks.push(chunk + open.slice().reverse().map(({ tag }) => `</${tag}>`).join(''));
+      chunk = open.map(({ html: tag }) => tag).join('');
+    }
+    if (chunk.length + token.length + suffix.length > limit)
+      throw new Error('Telegram HTML token exceeds message limit');
+    chunk += token;
+    open = next;
+  }
+  if (chunk) chunks.push(chunk);
+  return chunks;
+}

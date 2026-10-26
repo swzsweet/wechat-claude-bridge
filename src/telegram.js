@@ -2,7 +2,7 @@ import { readFile, writeFile, mkdir } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { sleep } from './common.js';
 import { normalSizeHeadings } from './telegram-format.js';
-import { telegramHtml } from './telegram-html.js';
+import { telegramHtmlChunks } from './telegram-html.js';
 
 export const validTelegramToken = (token) => /^\d+:[A-Za-z0-9_-]+$/.test(token);
 
@@ -171,28 +171,38 @@ export class TelegramTextClient {
     return message?.message_id ? [message.message_id] : [];
   }
 
-  async sendMarkdown(chatId, text, fallbackText = text, { replyToMessageId } = {}) {
+  async sendMarkdown(chatId, text, fallbackText = text, { approvalId, replyToMessageId } = {}) {
     const markdown = normalSizeHeadings(text.replace(/^([^\n]+：\n\[[^\]\n]+\]) /u, '$1\n\n'));
-    if (Buffer.byteLength(markdown, 'utf8') > 30000)
-      return this.sendText(chatId, fallbackText, { replyToMessageId });
+    if (!approvalId && Array.from(markdown).length <= 3000 && Buffer.byteLength(markdown, 'utf8') <= 30000) {
+      try {
+        const data = { chat_id: chatId, rich_message: { markdown } };
+        const reply = replyParameters(replyToMessageId);
+        if (reply) data.reply_parameters = reply;
+        const message = await this.call('sendRichMessage', data);
+        return message?.message_id ? [message.message_id] : [];
+      } catch (error) { console.error('Telegram Markdown:', error.message); }
+    }
+    const ids = [];
     try {
-      const data = { chat_id: chatId, rich_message: { markdown } };
-      const reply = replyParameters(replyToMessageId);
-      if (reply) data.reply_parameters = reply;
-      const message = await this.call('sendRichMessage', data);
-      return message?.message_id ? [message.message_id] : [];
-    } catch (error) {
-      console.error('Telegram Markdown:', error.message);
-      if (Array.from(markdown).length <= 3500) {
-        try {
-          const data = { chat_id: chatId, text: telegramHtml(markdown), parse_mode: 'HTML' };
-          const reply = replyParameters(replyToMessageId);
-          if (reply) data.reply_parameters = reply;
-          const message = await this.call('sendMessage', data);
-          return message?.message_id ? [message.message_id] : [];
-        } catch (htmlError) { console.error('Telegram HTML:', htmlError.message); }
+      const chunks = telegramHtmlChunks(markdown);
+      for (let index = 0; index < chunks.length; index++) {
+        const data = { chat_id: chatId, text: chunks[index], parse_mode: 'HTML' };
+        const reply = index === 0 ? replyParameters(replyToMessageId) : null;
+        if (reply) data.reply_parameters = reply;
+        if (approvalId && index === chunks.length - 1) data.reply_markup = { inline_keyboard: [[
+          { text: '批准', callback_data: `approval:approve:${approvalId}` },
+          { text: '拒绝', callback_data: `approval:deny:${approvalId}` }
+        ]] };
+        const message = await this.call('sendMessage', data);
+        if (Number.isSafeInteger(message?.message_id)) ids.push(message.message_id);
       }
-      return this.sendText(chatId, fallbackText, { replyToMessageId });
+      if (approvalId && ids.length) this.approvalMessages.set(approvalId,
+        { chatId, messageId: ids.at(-1) });
+      return ids;
+    } catch (error) {
+      console.error('Telegram HTML:', error.message);
+      if (ids.length) throw error;
+      return this.sendText(chatId, fallbackText, { approvalId, replyToMessageId });
     }
   }
 

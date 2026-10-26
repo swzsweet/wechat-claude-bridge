@@ -12,6 +12,17 @@ export function formatTelegramNotification(computer, { title, project, session, 
   return `**${heading}**\n\n${tags}${context}\n\n---\n\n${String(body || '').trim()}`;
 }
 
+export function formatTelegramApproval(title, id, tool, input) {
+  const heading = label(title).replace(/[*_\[\]]/g, '');
+  const name = label(tool).replace(/[*_\[\]]/g, '');
+  if (tool === 'ExitPlanMode' && typeof input.plan === 'string') {
+    const { plan, ...other } = input;
+    const extra = Object.keys(other).length ? `\n\n\`\`\`json\n${JSON.stringify(other, null, 2)}\n\`\`\`` : '';
+    return `**${heading} 请求 ${id}**\n\n**${name} · 计划**\n\n${plan}${extra}\n\n批准 ${id} / 拒绝 ${id}`;
+  }
+  return `**${heading} 请求 ${id}**\n\n**${name}**\n\n\`\`\`json\n${JSON.stringify(input, null, 2)}\n\`\`\`\n\n批准 ${id} / 拒绝 ${id}`;
+}
+
 export function normalSizeHeadings(markdown) {
   let fence = null;
   return markdown.split('\n').map((line) => {

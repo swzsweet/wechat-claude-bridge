@@ -1,6 +1,6 @@
 import { code, describeRequest, parseCommand } from './common.js';
 import { TaskStore } from './task-store.js';
-import { formatTelegramNotification } from './telegram-format.js';
+import { formatTelegramApproval, formatTelegramNotification } from './telegram-format.js';
 import { createWordDocument, plainDocumentText } from './document-content.js';
 
 export class GatewayCore {
@@ -446,7 +446,8 @@ export class GatewayCore {
     this.pending.set(id, { worker, tool, input, expires: Date.now() + this.ttlMs });
     const action = tool === 'AskUserQuestion' ? `答 ${id} 选项序号` : `批准 ${id} / 拒绝 ${id}`;
     try { await this.send(`${this.label(worker)}请求 ${id}\n${detail}\n\n${action}`,
-      { approvalId: tool === 'AskUserQuestion' ? undefined : id }); }
+      { approvalId: tool === 'AskUserQuestion' ? undefined : id, markdown: true,
+        telegramMarkdown: formatTelegramApproval(this.label(worker), id, tool, input) }); }
     catch (error) { this.cancelApproval(id); throw error; }
     return { id };
   }
@@ -470,7 +471,10 @@ export class GatewayCore {
       : session ? ` · 会话 ${session}` : '';
     const label = `${this.label(worker)} VS Code${context}`;
     try {
-      await this.send(`${label} 请求 ${id}\n${detail}\n\n批准 ${id} / 拒绝 ${id}`, { approvalId: id });
+      await this.send(`${label} 请求 ${id}\n${detail}\n\n批准 ${id} / 拒绝 ${id}`, {
+        approvalId: id, markdown: true,
+        telegramMarkdown: formatTelegramApproval(label, id, tool, input)
+      });
     } catch (error) {
       this.cancelLocalApproval(id, '消息发送失败');
       throw error;

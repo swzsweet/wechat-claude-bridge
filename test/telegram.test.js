@@ -132,6 +132,37 @@ test('Telegram falls back to plain text if rich and HTML both fail', async () =>
   assert.equal(calls.at(-1).data.parse_mode, undefined);
 });
 
+test('long Markdown and approval plans keep HTML formatting in later segments', async () => {
+  const calls = [];
+  let nextId = 40;
+  const client = new TelegramTextClient({ token: '123:example', cursorFile: 'unused', onMessage: async () => {},
+    request: async (url, options) => {
+      const method = url.split('/').at(-1);
+      const data = JSON.parse(options.body);
+      calls.push({ method, data });
+      return { ok: true, json: async () => ({ ok: true, result: { message_id: ++nextId } }) };
+    } });
+  const longResult = `**结果**\n\n**${'已检查'.repeat(1300)}**`;
+  const ids = await client.sendMarkdown('123', longResult, longResult, { replyToMessageId: 80 });
+  assert.ok(ids.length > 1);
+  assert.ok(calls.every(({ method, data }) => method === 'sendMessage' && data.parse_mode === 'HTML'));
+  assert.match(calls[1].data.text, /<b>/);
+  assert.deepEqual(calls[0].data.reply_parameters,
+    { message_id: 80, allow_sending_without_reply: true });
+  assert.equal(calls[1].data.reply_parameters, undefined);
+
+  calls.length = 0;
+  const approvalIds = await client.sendMarkdown('123', `**审批**\n\n${'计划内容'.repeat(1300)}`,
+    '审批纯文本', { approvalId: 'A1B2C3D4' });
+  assert.ok(approvalIds.length > 1);
+  assert.ok(calls.every(({ method, data }) => method === 'sendMessage' && data.parse_mode === 'HTML'));
+  assert.equal(calls[0].data.reply_markup, undefined);
+  assert.equal(calls.at(-1).data.reply_markup.inline_keyboard[0][0].callback_data,
+    'approval:approve:A1B2C3D4');
+  assert.equal(client.ownsApprovalMessage({ approval_id: 'A1B2C3D4',
+    from_user_id: '123', telegram_message_id: approvalIds.at(-1) }), true);
+});
+
 test('Telegram approval buttons belong to a private message from the bot', async () => {
   const calls = [];
   const client = new TelegramTextClient({ token: '123:example', cursorFile: 'unused', onMessage: async () => {},

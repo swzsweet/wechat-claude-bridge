@@ -76,7 +76,8 @@ const core = new GatewayCore({
     if (telegram && core.telegramOwnerId) senders.push(async (text) => {
       const ids = progressTaskId
         ? await telegram.sendProgress(core.telegramOwnerId, progressTaskId, text, { replyToMessageId })
-        : markdown ? await telegram.sendMarkdown(core.telegramOwnerId, telegramMarkdown || text, text, { replyToMessageId })
+        : markdown ? await telegram.sendMarkdown(core.telegramOwnerId, telegramMarkdown || text, text,
+          { approvalId, replyToMessageId })
           : await telegram.sendText(core.telegramOwnerId, text, { approvalId, keyboard, replyToMessageId });
       if (origin && ids?.length) await recordOrigin(ids, origin);
     });
