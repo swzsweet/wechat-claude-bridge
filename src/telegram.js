@@ -121,15 +121,25 @@ export class TelegramTextClient {
   }
 
   async call(method, data, timeout = 45000) {
-    const response = await this.request(`https://api.telegram.org/bot${this.token}/${method}`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify(data),
-      signal: AbortSignal.timeout(timeout)
-    });
-    const result = await response.json();
-    if (!response.ok || !result.ok) throw new Error(`Telegram ${method}: ${result.description || `HTTP ${response.status}`}`);
-    return result.result;
+    const attempts = method === 'sendMessage' ? 3 : 1;
+    for (let attempt = 0; attempt < attempts; attempt++) {
+      let response;
+      try {
+        response = await this.request(`https://api.telegram.org/bot${this.token}/${method}`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify(data),
+          signal: AbortSignal.timeout(timeout)
+        });
+      } catch (error) {
+        if (attempt === attempts - 1) throw error;
+        await sleep(500 * (attempt + 1));
+        continue;
+      }
+      const result = await response.json();
+      if (!response.ok || !result.ok) throw new Error(`Telegram ${method}: ${result.description || `HTTP ${response.status}`}`);
+      return result.result;
+    }
   }
 
   async sendText(chatId, text, { approvalId, keyboard, replyToMessageId } = {}) {

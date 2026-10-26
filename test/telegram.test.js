@@ -163,6 +163,23 @@ test('long Markdown and approval plans keep HTML formatting in later segments', 
     from_user_id: '123', telegram_message_id: approvalIds.at(-1) }), true);
 });
 
+test('Telegram retries a transient network failure on a later HTML segment', async () => {
+  const calls = [];
+  let nextId = 50;
+  const client = new TelegramTextClient({ token: '123:example', cursorFile: 'unused', onMessage: async () => {},
+    request: async (url, options) => {
+      const data = JSON.parse(options.body);
+      calls.push(data);
+      if (calls.length === 2) throw new Error('fetch failed');
+      return { ok: true, json: async () => ({ ok: true, result: { message_id: ++nextId } }) };
+    } });
+  const ids = await client.sendMarkdown('123', `**${'内容'.repeat(1800)}**`);
+  assert.deepEqual(ids, [51, 52]);
+  assert.equal(calls.length, 3);
+  assert.equal(calls[1].text, calls[2].text);
+  assert.ok(calls.every((data) => data.parse_mode === 'HTML'));
+});
+
 test('Telegram approval buttons belong to a private message from the bot', async () => {
   const calls = [];
   const client = new TelegramTextClient({ token: '123:example', cursorFile: 'unused', onMessage: async () => {},
