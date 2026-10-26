@@ -101,14 +101,18 @@ systemctl enable "$service" >/dev/null
 if ! systemctl restart "$service"; then
   failed=1
 else
-  sleep 2
   gateway_host=$(awk -F= '$1 == "BRIDGE_HOST" { print $2; exit }' "$env_file")
-  if systemctl is-active --quiet "$service" &&
-     "$base/node/bin/node" -e 'fetch(`http://${process.argv[1]}:8765/status`, { signal: AbortSignal.timeout(3000) }).then(r => process.exit(r.status === 401 ? 0 : 1)).catch(() => process.exit(1))' "$gateway_host"; then
-    failed=0
-  else
-    failed=1
-  fi
+  failed=1
+  attempt=0
+  while [ "$attempt" -lt 10 ]; do
+    if systemctl is-active --quiet "$service" &&
+       "$base/node/bin/node" -e 'fetch(`http://${process.argv[1]}:8765/status`, { signal: AbortSignal.timeout(3000) }).then(r => process.exit(r.status === 401 ? 0 : 1)).catch(() => process.exit(1))' "$gateway_host"; then
+      failed=0
+      break
+    fi
+    attempt=$((attempt + 1))
+    sleep 2
+  done
 fi
 if [ "$failed" -ne 0 ]; then
   if [ -n "$old" ]; then
