@@ -15,6 +15,12 @@ export function formatTelegramNotification(computer, { title, project, session, 
 export function formatTelegramApproval(title, id, tool, input) {
   const heading = label(title).replace(/[*_\[\]]/g, '');
   const name = label(tool).replace(/[*_\[\]]/g, '');
+  if (tool === 'AskUserQuestion' && input.questions?.length === 1) {
+    const question = input.questions[0];
+    const options = question.options.map((option, index) =>
+      `${index + 1}. ${option.label}${option.description ? ` — ${option.description}` : ''}`).join('\n');
+    return `**${heading} 请求 ${id}**\n\n**${name}**\n\n${question.question}\n\n${options}\n\n请选择选项，或发送 拒绝 ${id}`;
+  }
   if (tool === 'ExitPlanMode' && typeof input.plan === 'string') {
     const { plan, ...other } = input;
     const extra = Object.keys(other).length ? `\n\n\`\`\`json\n${JSON.stringify(other, null, 2)}\n\`\`\`` : '';

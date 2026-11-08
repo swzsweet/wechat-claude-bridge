@@ -204,6 +204,28 @@ test('Telegram approval buttons belong to a private message from the bot', async
   assert.equal(client.ownsApprovalMessage(callback), false);
 });
 
+test('Telegram question buttons select an answer and retain approval message ownership', async () => {
+  const calls = [];
+  const client = new TelegramTextClient({ token: '123:example', cursorFile: 'unused', onMessage: async () => {},
+    request: async (url, options) => {
+      calls.push({ method: url.split('/').at(-1), data: JSON.parse(options.body) });
+      return { ok: true, json: async () => ({ ok: true, result: { message_id: 42 } }) };
+    } });
+  await client.sendMarkdown('123', '**Question**', 'Question', {
+    approvalId: 'A1B2C3D4', approvalOptions: ['确认，重启15195前端', '不重启']
+  });
+  const rows = calls[0].data.reply_markup.inline_keyboard;
+  assert.deepEqual(rows.map((row) => row[0].text), ['1. 确认，重启15195前端', '2. 不重启', '拒绝']);
+  const update = { update_id: 19, callback_query: { id: 'callback-1', data: rows[1][0].callback_data,
+    from: { id: 123 }, message: { message_id: 42, chat: { id: 123, type: 'private' } } } };
+  const callback = telegramApprovalCallback(update);
+  assert.equal(callback.text, '答 A1B2C3D4 2');
+  assert.equal(client.ownsApprovalMessage(callback), true);
+  assert.equal(telegramApprovalCallback({ ...update, callback_query: {
+    ...update.callback_query, data: 'approval:answer-5:A1B2C3D4' } }), null);
+  assert.equal(client.ownsApprovalMessage({ ...callback, telegram_message_id: 43 }), false);
+});
+
 test('Telegram menu exposes only binding before pairing and working commands afterward', async () => {
   const calls = [];
   const client = new TelegramTextClient({ token: '123:example', cursorFile: 'unused', onMessage: async () => {},

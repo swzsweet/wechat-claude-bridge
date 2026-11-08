@@ -2,6 +2,7 @@ import { code, describeRequest, parseCommand } from './common.js';
 import { TaskStore } from './task-store.js';
 import { formatTelegramApproval, formatTelegramNotification } from './telegram-format.js';
 import { createWordDocument, plainDocumentText } from './document-content.js';
+import { approvalQuestion, selectedAnswer } from './approval-question.js';
 
 export class GatewayCore {
   constructor({ send, saveOwner, saveTelegramOwner = async () => {}, saveContext = async () => {}, ownerId = null,
@@ -111,11 +112,19 @@ export class GatewayCore {
         return '审批已过期。';
       }
       if (pending.kind === 'local') {
-        if (command.type === 'answer') {
+        if (pending.tool === 'AskUserQuestion') {
+          if (command.type === 'decision' && command.allow) {
+            await this.send('请选择问题的具体选项，或拒绝。'); return '请选择具体选项。';
+          }
+          if (command.type === 'answer' && !selectedAnswer(pending.input, command.answer)) {
+            await this.send('选项序号无效，请按消息中的选项重新选择。'); return '选项序号无效。';
+          }
+        } else if (command.type === 'answer') {
           await this.send('这条 VS Code 审批只接受批准或拒绝。'); return '请批准或拒绝。';
         }
         this.cancelApproval(command.id);
-        pending.resolve({ allow: command.allow });
+        pending.resolve(command.type === 'answer'
+          ? { allow: true, answer: command.answer } : { allow: command.allow });
         await this.send(`已提交 ${command.id}。`);
         return command.allow ? '已批准。' : '已拒绝。';
       }
@@ -124,6 +133,9 @@ export class GatewayCore {
       }
       if (command.type === 'decision' && command.allow && pending.tool === 'AskUserQuestion') {
         await this.send('请用「答 编号 选项序号」回答问题，或拒绝。'); return '请回答选项或拒绝。';
+      }
+      if (command.type === 'answer' && !selectedAnswer(pending.input, command.answer)) {
+        await this.send('选项序号无效，请按消息中的选项重新选择。'); return '选项序号无效。';
       }
       this.cancelApproval(command.id);
       this.enqueue(pending.worker, { type: 'decision', id: command.id, allow: command.allow ?? true, answer: command.answer });
@@ -439,20 +451,25 @@ export class GatewayCore {
   }
 
   async requestApproval(worker, tool, input) {
+    if (tool === 'AskUserQuestion' && !approvalQuestion(input))
+      return { error: 'This question requires local interaction' };
     const detail = describeRequest(tool, input);
     if (!detail) return { error: 'Operation too large to review in chat' };
     let id = code();
     while (this.pending.has(id)) id = code();
     this.pending.set(id, { worker, tool, input, expires: Date.now() + this.ttlMs });
-    const action = tool === 'AskUserQuestion' ? `答 ${id} 选项序号` : `批准 ${id} / 拒绝 ${id}`;
+    const question = tool === 'AskUserQuestion' ? approvalQuestion(input) : null;
+    const action = question ? `答 ${id} 选项序号 / 拒绝 ${id}` : `批准 ${id} / 拒绝 ${id}`;
     try { await this.send(`${this.label(worker)}请求 ${id}\n${detail}\n\n${action}`,
-      { approvalId: tool === 'AskUserQuestion' ? undefined : id, markdown: true,
+      { approvalId: id, approvalOptions: question?.options.map((option) => option.label), markdown: true,
         telegramMarkdown: formatTelegramApproval(this.label(worker), id, tool, input) }); }
     catch (error) { this.cancelApproval(id); throw error; }
     return { id };
   }
 
   async requestLocalApproval(worker, tool, input, session = '', sessionTitle = '') {
+    if (tool === 'AskUserQuestion' && !approvalQuestion(input))
+      return { error: 'This question requires local interaction' };
     const detail = describeRequest(tool, input);
     if (!detail) return { error: 'Operation too large to review in chat' };
     let id = code();
@@ -463,7 +480,7 @@ export class GatewayCore {
       this.cancelLocalApproval(id, '远程审批超时，操作已拒绝');
     }, this.ttlMs);
     this.pending.set(id, {
-      kind: 'local', worker, tool, expires: Date.now() + this.ttlMs,
+      kind: 'local', worker, tool, input, expires: Date.now() + this.ttlMs,
       resolve: (result) => { clearTimeout(timer); resolveDecision(result); }
     });
     const cleanTitle = String(sessionTitle).replace(/[\r\n\t`\\]/g, ' ').trim().slice(0, 80);
@@ -471,8 +488,9 @@ export class GatewayCore {
       : session ? ` · 会话 ${session}` : '';
     const label = `${this.label(worker)} VS Code${context}`;
     try {
-      await this.send(`${label} 请求 ${id}\n${detail}\n\n批准 ${id} / 拒绝 ${id}`, {
-        approvalId: id, markdown: true,
+      const question = tool === 'AskUserQuestion' ? approvalQuestion(input) : null;
+      await this.send(`${label} 请求 ${id}\n${detail}\n\n${question ? `答 ${id} 选项序号 / 拒绝 ${id}` : `批准 ${id} / 拒绝 ${id}`}`, {
+        approvalId: id, approvalOptions: question?.options.map((option) => option.label), markdown: true,
         telegramMarkdown: formatTelegramApproval(label, id, tool, input)
       });
     } catch (error) {

@@ -8,16 +8,31 @@ const notificationsDir = resolve(dirname(fileURLToPath(import.meta.url)), '..', 
 const configFile = join(notificationsDir, 'wechat-config.json');
 const receiptDir = join(notificationsDir, 'wechat');
 
+function questionAnswer(input, answer, validateOnly = false) {
+  const questions = input?.questions;
+  if (!Array.isArray(questions) || questions.length !== 1) return null;
+  const question = questions[0];
+  if (typeof question?.question !== 'string' || !question.question.trim() ||
+      question.multiSelect !== false || !Array.isArray(question.options) ||
+      question.options.length < 2 || question.options.length > 4 ||
+      question.options.some((option) => typeof option?.label !== 'string' || !option.label.trim())) return null;
+  if (validateOnly) return {};
+  const choice = Number(answer);
+  if (!Number.isInteger(choice) || choice < 1 || choice > question.options.length) return null;
+  return { [question.question]: question.options[choice - 1].label };
+}
+
 function wlanAddress() {
   return (networkInterfaces().WLAN || []).find((address) =>
     address.family === 'IPv4' && !address.internal)?.address || null;
 }
 
-export function permissionDecision(allow, reason = '已在微信拒绝') {
+export function permissionDecision(allow, reason = '已在微信拒绝', updatedInput) {
   return {
     hookSpecificOutput: {
       hookEventName: 'PermissionRequest',
-      decision: allow ? { behavior: 'allow' } : { behavior: 'deny', message: reason }
+      decision: allow ? { behavior: 'allow', ...(updatedInput ? { updatedInput } : {}) }
+        : { behavior: 'deny', message: reason }
     }
   };
 }
@@ -29,6 +44,7 @@ export async function requestWeChatApproval(input, {
   if (process.env.WECHAT_BRIDGE_WORKER === '1') return null;
   if (typeof input?.tool_name !== 'string' || !input.tool_name || !input.tool_input ||
       typeof input.tool_input !== 'object' || Array.isArray(input.tool_input)) return null;
+  if (input.tool_name === 'AskUserQuestion' && !questionAnswer(input.tool_input, null, true)) return null;
   const config = JSON.parse(await read(configPath, 'utf8'));
   if (config.enabled === false || !['a', 'b'].includes(config.workerId)) return null;
   let endpoint;
@@ -66,6 +82,11 @@ export async function requestWeChatApproval(input, {
   if (!response.ok) throw new Error(`WECHAT_APPROVAL_HTTP_${response.status}`);
   const result = await response.json();
   if (typeof result.allow !== 'boolean') throw new Error('WECHAT_APPROVAL_INVALID_RESPONSE');
+  if (input.tool_name === 'AskUserQuestion' && result.allow) {
+    const answers = questionAnswer(input.tool_input, result.answer);
+    if (!answers) throw new Error('WECHAT_APPROVAL_INVALID_ANSWER');
+    return permissionDecision(true, '', { ...input.tool_input, answers });
+  }
   return permissionDecision(result.allow, result.reason || '已在微信拒绝');
 }
 

@@ -8,6 +8,7 @@ import { workerPermissionOptions } from './permission-mode.js';
 import { withQuotedContext } from './quoted-prompt.js';
 import { shareableFile } from './file-access.js';
 import { extractDocumentText } from './document-content.js';
+import { approvalQuestion, selectedAnswer } from './approval-question.js';
 
 const id = process.env.WORKER_ID?.toLowerCase();
 const gateway = process.env.GATEWAY_URL?.replace(/\/$/, '');
@@ -42,8 +43,8 @@ let activeRun = null;
 const decisions = new Map();
 
 async function approve(tool, input) {
-  if (tool === 'AskUserQuestion' && (input.questions || []).length !== 1) {
-    return { behavior: 'deny', message: 'Multiple questions require local approval' };
+  if (tool === 'AskUserQuestion' && !approvalQuestion(input)) {
+    return { behavior: 'deny', message: 'This question requires local interaction' };
   }
   const request = await api('/approval', { tool, input });
   if (request.error) return { behavior: 'deny', message: request.error };
@@ -55,12 +56,9 @@ async function approve(tool, input) {
   if (outcome.reason) api('/cancel', { id }).catch(() => {});
   if (!outcome.allow) return { behavior: 'deny', message: outcome.reason || 'Denied in WeChat' };
   if (tool === 'AskUserQuestion') {
-    const questions = input.questions || [];
-    if (questions.length !== 1) return { behavior: 'deny', message: 'Multiple questions require local approval' };
-    const choice = Number(outcome.answer);
-    const options = questions[0].options || [];
-    if (!Number.isInteger(choice) || choice < 1 || choice > options.length) return { behavior: 'deny', message: 'Invalid option number' };
-    return { behavior: 'allow', updatedInput: { ...input, answers: { [questions[0].question]: options[choice - 1].label } } };
+    const answers = selectedAnswer(input, outcome.answer);
+    if (!answers) return { behavior: 'deny', message: 'Invalid option number' };
+    return { behavior: 'allow', updatedInput: { ...input, answers } };
   }
   return { behavior: 'allow', updatedInput: input };
 }

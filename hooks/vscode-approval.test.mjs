@@ -29,6 +29,29 @@ test('returns the PermissionRequest decision from the bridge', async () => {
   assert.deepEqual(await requestWeChatApproval(input, dependencies), permissionDecision(false));
 });
 
+test('selected VS Code option is returned in updatedInput.answers', async () => {
+  const question = { tool_name: 'AskUserQuestion', tool_input: { questions: [{
+    question: '是否重启前端？', header: '确认重启', multiSelect: false,
+    options: [{ label: '确认，重启15195前端' }, { label: '不重启' }]
+  }] } };
+  let posted = false;
+  const dependencies = {
+    read: async (path) => path.endsWith('bridge-token.txt') ? 'synthetic-bridge-token-for-test' : config,
+    address: () => '192.168.31.166', suppress: async () => {},
+    fetcher: async () => { posted = true; return { ok: true, json: async () => ({ allow: true, answer: '2' }) }; }
+  };
+  assert.deepEqual((await requestWeChatApproval(question, dependencies)).hookSpecificOutput.decision,
+    { behavior: 'allow', updatedInput: { ...question.tool_input, answers: { '是否重启前端？': '不重启' } } });
+  assert.equal(posted, true);
+  dependencies.fetcher = async () => ({ ok: true, json: async () => ({ allow: true }) });
+  await assert.rejects(() => requestWeChatApproval(question, dependencies), /WECHAT_APPROVAL_INVALID_ANSWER/);
+  posted = false;
+  assert.equal(await requestWeChatApproval({ ...question, tool_input: { questions: [
+    { ...question.tool_input.questions[0], multiSelect: true }
+  ] } }, dependencies), null);
+  assert.equal(posted, false);
+});
+
 test('routes VS Code approvals to the configured server gateway', async () => {
   let destination;
   const remoteConfig = JSON.stringify({

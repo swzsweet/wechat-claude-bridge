@@ -95,14 +95,16 @@ export function telegramActionCallback(update) {
 
 export function telegramApprovalCallback(update) {
   const query = update.callback_query;
-  const match = /^approval:(approve|deny):([A-F0-9]{8})$/.exec(query?.data || '');
+  const match = /^approval:(approve|deny|answer-[1-4]):([A-F0-9]{8})$/.exec(query?.data || '');
   if (!match || query.message?.chat?.type !== 'private' ||
       query.from?.id !== query.message.chat.id || !Number.isInteger(query.message.message_id)) return null;
   return {
     channel: 'telegram', from_user_id: String(query.from.id),
     message_id: String(update.update_id), callback_id: query.id,
     telegram_message_id: query.message.message_id,
-    approval_id: match[2], text: `${match[1] === 'approve' ? '批准' : '拒绝'} ${match[2]}`
+    approval_id: match[2], text: match[1].startsWith('answer-')
+      ? `答 ${match[2]} ${match[1].slice(7)}`
+      : `${match[1] === 'approve' ? '批准' : '拒绝'} ${match[2]}`
   };
 }
 
@@ -142,17 +144,30 @@ export class TelegramTextClient {
     }
   }
 
-  async sendText(chatId, text, { approvalId, keyboard, replyToMessageId } = {}) {
+  approvalKeyboard(approvalId, approvalOptions) {
+    if (approvalOptions?.length) return [
+      ...approvalOptions.map((label, index) => [{
+        text: `${index + 1}. ${Array.from(label).slice(0, 42).join('')}`,
+        callback_data: `approval:answer-${index + 1}:${approvalId}`
+      }]),
+      [{ text: '拒绝', callback_data: `approval:deny:${approvalId}` }]
+    ];
+    return [[
+      { text: '批准', callback_data: `approval:approve:${approvalId}` },
+      { text: '拒绝', callback_data: `approval:deny:${approvalId}` }
+    ]];
+  }
+
+  async sendText(chatId, text, { approvalId, approvalOptions, keyboard, replyToMessageId } = {}) {
     const chars = Array.from(text);
     const messageIds = [];
     for (let i = 0; i < chars.length; i += 2000) {
       const data = { chat_id: chatId, text: chars.slice(i, i + 2000).join('') };
       const reply = i === 0 ? replyParameters(replyToMessageId) : null;
       if (reply) data.reply_parameters = reply;
-      if (approvalId && i + 2000 >= chars.length) data.reply_markup = { inline_keyboard: [[
-        { text: '批准', callback_data: `approval:approve:${approvalId}` },
-        { text: '拒绝', callback_data: `approval:deny:${approvalId}` }
-      ]] };
+      if (approvalId && i + 2000 >= chars.length) data.reply_markup = {
+        inline_keyboard: this.approvalKeyboard(approvalId, approvalOptions)
+      };
       else if (keyboard?.length && i + 2000 >= chars.length) data.reply_markup = { inline_keyboard: keyboard };
       const message = await this.call('sendMessage', data);
       if (Number.isSafeInteger(message?.message_id)) messageIds.push(message.message_id);
@@ -181,7 +196,7 @@ export class TelegramTextClient {
     return message?.message_id ? [message.message_id] : [];
   }
 
-  async sendMarkdown(chatId, text, fallbackText = text, { approvalId, replyToMessageId } = {}) {
+  async sendMarkdown(chatId, text, fallbackText = text, { approvalId, approvalOptions, replyToMessageId } = {}) {
     const markdown = normalSizeHeadings(text.replace(/^([^\n]+：\n\[[^\]\n]+\]) /u, '$1\n\n'));
     if (!approvalId && Array.from(markdown).length <= 3000 && Buffer.byteLength(markdown, 'utf8') <= 30000) {
       try {
@@ -199,10 +214,9 @@ export class TelegramTextClient {
         const data = { chat_id: chatId, text: chunks[index], parse_mode: 'HTML' };
         const reply = index === 0 ? replyParameters(replyToMessageId) : null;
         if (reply) data.reply_parameters = reply;
-        if (approvalId && index === chunks.length - 1) data.reply_markup = { inline_keyboard: [[
-          { text: '批准', callback_data: `approval:approve:${approvalId}` },
-          { text: '拒绝', callback_data: `approval:deny:${approvalId}` }
-        ]] };
+        if (approvalId && index === chunks.length - 1) data.reply_markup = {
+          inline_keyboard: this.approvalKeyboard(approvalId, approvalOptions)
+        };
         const message = await this.call('sendMessage', data);
         if (Number.isSafeInteger(message?.message_id)) ids.push(message.message_id);
       }
@@ -212,7 +226,7 @@ export class TelegramTextClient {
     } catch (error) {
       console.error('Telegram HTML:', error.message);
       if (ids.length) throw error;
-      return this.sendText(chatId, fallbackText, { approvalId, replyToMessageId });
+      return this.sendText(chatId, fallbackText, { approvalId, approvalOptions, replyToMessageId });
     }
   }
 

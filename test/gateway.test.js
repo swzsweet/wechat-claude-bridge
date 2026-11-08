@@ -286,9 +286,40 @@ test('approval buttons use the same one-time decision as text on both channels',
   await new Promise((resolve) => setImmediate(resolve));
   assert.deepEqual(settled, [first.id, second.id]);
 
-  const question = await core.requestApproval('a', 'AskUserQuestion', { questions: [] });
-  assert.equal(sent.at(-1).options.approvalId, undefined);
-  core.cancelApproval(question.id);
+  assert.deepEqual(await core.requestApproval('a', 'AskUserQuestion', { questions: [] }),
+    { error: 'This question requires local interaction' });
+});
+
+const restartQuestion = { questions: [{ question: '是否重启前端？', header: '确认重启', multiSelect: false,
+  options: [{ label: '确认，重启15195前端', description: '立即重新启动' },
+    { label: '不重启', description: '保持进程' }] }] };
+
+test('VS Code question buttons submit the selected answer, not a generic approval', async () => {
+  const sent = [];
+  const core = new GatewayCore({ telegramOwnerId: 'tg-owner', ownerId: 'wechat-owner',
+    send: async (text, options) => sent.push({ text, options }) });
+  const { id, decision } = await core.requestLocalApproval('a', 'AskUserQuestion', restartQuestion);
+  assert.deepEqual(sent.at(-1).options.approvalOptions, ['确认，重启15195前端', '不重启']);
+  assert.equal(sent.at(-1).options.approvalId, id);
+  await core.incoming({ channel: 'telegram', from_user_id: 'tg-owner', text: `批准 ${id}` });
+  assert.equal(core.pending.has(id), true);
+  await core.incoming({ channel: 'telegram', from_user_id: 'tg-owner', text: `答 ${id} 3` });
+  assert.equal(core.pending.has(id), true);
+  await core.incoming({ channel: 'telegram', from_user_id: 'tg-owner', text: `答 ${id} 2` });
+  assert.deepEqual(await decision, { allow: true, answer: '2' });
+  assert.equal(core.pending.has(id), false);
+});
+
+test('worker question uses option buttons and refuses unsupported questions', async () => {
+  const sent = [];
+  const core = new GatewayCore({ ownerId: 'owner', send: async (text, options) => sent.push({ text, options }) });
+  const { id } = await core.requestApproval('a', 'AskUserQuestion', restartQuestion);
+  assert.deepEqual(sent.at(-1).options.approvalOptions, ['确认，重启15195前端', '不重启']);
+  await core.incoming({ from_user_id: 'owner', text: `答 ${id} 1` });
+  assert.deepEqual(await core.next('a', true), { type: 'decision', id, allow: true, answer: '1' });
+  assert.deepEqual(await core.requestApproval('a', 'AskUserQuestion', { questions: [
+    { ...restartQuestion.questions[0], multiSelect: true }
+  ] }), { error: 'This question requires local interaction' });
 });
 
 test('ExitPlanMode approval renders plan as readable Markdown', async () => {

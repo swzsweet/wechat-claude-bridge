@@ -66,7 +66,7 @@ const core = new GatewayCore({
   saveOwner: async (ownerId) => saveJson(stateFile, { ownerId, telegramOwnerId: core.telegramOwnerId }),
   saveTelegramOwner: async (telegramOwnerId) => saveJson(stateFile, { ownerId: core.ownerId, telegramOwnerId }),
   onApprovalSettled: async (id) => telegram?.clearApproval(id),
-  send: async (message, { approvalId, markdown, telegramMarkdown, progressTaskId, keyboard,
+  send: async (message, { approvalId, approvalOptions, markdown, telegramMarkdown, progressTaskId, keyboard,
     replyToMessageId, origin } = {}) => {
     const senders = [];
     if (core.ownerId) senders.push(async (text) => {
@@ -77,8 +77,8 @@ const core = new GatewayCore({
       const ids = progressTaskId
         ? await telegram.sendProgress(core.telegramOwnerId, progressTaskId, text, { replyToMessageId })
         : markdown ? await telegram.sendMarkdown(core.telegramOwnerId, telegramMarkdown || text, text,
-          { approvalId, replyToMessageId })
-          : await telegram.sendText(core.telegramOwnerId, text, { approvalId, keyboard, replyToMessageId });
+          { approvalId, approvalOptions, replyToMessageId })
+          : await telegram.sendText(core.telegramOwnerId, text, { approvalId, approvalOptions, keyboard, replyToMessageId });
       if (origin && ids?.length) await recordOrigin(ids, origin);
     });
     await deliverToChats(message, senders);
