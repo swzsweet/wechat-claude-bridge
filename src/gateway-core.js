@@ -80,7 +80,7 @@ export class GatewayCore {
     }
     const reply = channel === 'telegram' && msg.telegram_reply_to_message_id
       ? this.replyTarget(this.resolveReply(msg.telegram_reply_to_message_id)) : null;
-    if (msg.telegram_reply_is_bot && !reply &&
+    if (msg.telegram_reply_is_bot && !reply && !msg.approval_other_id &&
         (msg.media || ['prompt', 'plan'].includes(parseCommand(text).type))) {
       await this.send('无法确定这条旧消息对应的会话，请引用新的任务结果或 Claude Code 本轮结果通知。');
       return;
@@ -96,7 +96,9 @@ export class GatewayCore {
       } catch (error) { await this.send(`文件接收失败：${error.message}`); }
       return;
     }
-    let command = parseCommand(text);
+    let command = msg.approval_other_id && channel === 'telegram'
+      ? { type: 'answer', id: msg.approval_other_id, answer: { other: text } }
+      : parseCommand(text);
     if (command.type === 'route') {
       this.route = command.worker;
       if (!command.prompt) { await this.send(`已切换到${this.label(this.route)}。`); return; }
@@ -126,7 +128,7 @@ export class GatewayCore {
         pending.resolve(command.type === 'answer'
           ? { allow: true, answer: command.answer } : { allow: command.allow });
         await this.send(`已提交 ${command.id}。`);
-        return command.allow ? '已批准。' : '已拒绝。';
+        return command.type === 'answer' ? '已提交答案。' : command.allow ? '已批准。' : '已拒绝。';
       }
       if (command.type === 'answer' && pending.tool !== 'AskUserQuestion') {
         await this.send('这条审批不需要回答，请发送批准或拒绝。'); return '请批准或拒绝。';
@@ -140,7 +142,7 @@ export class GatewayCore {
       this.cancelApproval(command.id);
       this.enqueue(pending.worker, { type: 'decision', id: command.id, allow: command.allow ?? true, answer: command.answer });
       await this.send(`已提交 ${command.id}。`);
-      return command.allow === false ? '已拒绝。' : '已批准。';
+      return command.type === 'answer' ? '已提交答案。' : command.allow === false ? '已拒绝。' : '已批准。';
     }
     if (command.type === 'help') {
       await this.send('命令：/a、/b 切换电脑；/status 查看在线状态；/projects 查看项目；/project 项目名 切换项目；/tasks 查看任务；/cancel 编号 取消；/retry 编号 重试；/plan 需求 制定计划；/file 相对路径 发送项目文件；/export 编号 docx 导出计划或结果；/new_project 项目名 新建项目；/import_project 项目名 完整路径 登记项目；/import_projects 批量登记；/new 新开会话；/auto on、/auto off。图片和文件可直接发送。');
@@ -459,7 +461,7 @@ export class GatewayCore {
     while (this.pending.has(id)) id = code();
     this.pending.set(id, { worker, tool, input, expires: Date.now() + this.ttlMs });
     const question = tool === 'AskUserQuestion' ? approvalQuestion(input) : null;
-    const action = question ? `答 ${id} 选项序号 / 拒绝 ${id}` : `批准 ${id} / 拒绝 ${id}`;
+    const action = question ? `答 ${id} 选项序号 / 其他按钮 / 拒绝 ${id}` : `批准 ${id} / 拒绝 ${id}`;
     try { await this.send(`${this.label(worker)}请求 ${id}\n${detail}\n\n${action}`,
       { approvalId: id, approvalOptions: question?.options.map((option) => option.label), markdown: true,
         telegramMarkdown: formatTelegramApproval(this.label(worker), id, tool, input) }); }

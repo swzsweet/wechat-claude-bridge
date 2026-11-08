@@ -50,6 +50,10 @@ test('selected VS Code option is returned in updatedInput.answers', async () => 
     { ...question.tool_input.questions[0], multiSelect: true }
   ] } }, dependencies), null);
   assert.equal(posted, false);
+  dependencies.fetcher = async () => ({ ok: true, json: async () => ({ allow: true,
+    answer: { other: '稍后由我手动重启' } }) });
+  assert.deepEqual((await requestWeChatApproval(question, dependencies)).hookSpecificOutput.decision.updatedInput.answers,
+    { '是否重启前端？': '稍后由我手动重启' });
 });
 
 test('routes VS Code approvals to the configured server gateway', async () => {

@@ -215,7 +215,8 @@ test('Telegram question buttons select an answer and retain approval message own
     approvalId: 'A1B2C3D4', approvalOptions: ['确认，重启15195前端', '不重启']
   });
   const rows = calls[0].data.reply_markup.inline_keyboard;
-  assert.deepEqual(rows.map((row) => row[0].text), ['1. 确认，重启15195前端', '2. 不重启', '拒绝']);
+  assert.deepEqual(rows.map((row) => row[0].text),
+    ['1. 确认，重启15195前端', '2. 不重启', '其他（填写文字）', '拒绝']);
   const update = { update_id: 19, callback_query: { id: 'callback-1', data: rows[1][0].callback_data,
     from: { id: 123 }, message: { message_id: 42, chat: { id: 123, type: 'private' } } } };
   const callback = telegramApprovalCallback(update);
@@ -224,6 +225,21 @@ test('Telegram question buttons select an answer and retain approval message own
   assert.equal(telegramApprovalCallback({ ...update, callback_query: {
     ...update.callback_query, data: 'approval:answer-5:A1B2C3D4' } }), null);
   assert.equal(client.ownsApprovalMessage({ ...callback, telegram_message_id: 43 }), false);
+  const other = telegramApprovalCallback({ ...update, callback_query: {
+    ...update.callback_query, data: 'approval:other:A1B2C3D4' } });
+  assert.equal(other.approval_other, true);
+  await client.promptOther('123', 'A1B2C3D4');
+  assert.equal(calls.at(-1).data.reply_markup.force_reply, true);
+});
+
+test('Telegram recognizes Other text only when replying to the bot prompt', () => {
+  const message = { message_id: 50, chat: { id: 123, type: 'private' }, from: { id: 123 },
+    text: '请稍后再问我', reply_to_message: { message_id: 42,
+      chat: { id: 123 }, from: { id: 999, is_bot: true },
+      text: '请输入其他答案（审批 A1B2C3D4）\n直接回复这条消息，最多 500 字。' } };
+  assert.equal(telegramMessage({ update_id: 60, message }).approval_other_id, 'A1B2C3D4');
+  assert.equal(telegramMessage({ update_id: 61, message: { ...message, reply_to_message: {
+    ...message.reply_to_message, from: { id: 456 } } } }).approval_other_id, undefined);
 });
 
 test('Telegram menu exposes only binding before pairing and working commands afterward', async () => {

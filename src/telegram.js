@@ -55,6 +55,12 @@ function quotedMessage(message) {
   return chars.length > 1800 ? `${chars.slice(0, 1800).join('')}\n[引用内容已截断]` : clean;
 }
 
+function otherApprovalId(message) {
+  if (typeof message.text !== 'string' || message.reply_to_message?.from?.is_bot !== true ||
+      message.reply_to_message.chat?.id !== message.chat.id) return null;
+  return /^请输入其他答案（审批 ([A-F0-9]{8})）/.exec(message.reply_to_message.text || '')?.[1] || null;
+}
+
 function replyParameters(messageId) {
   return Number.isSafeInteger(messageId) && messageId > 0
     ? { message_id: messageId, allow_sending_without_reply: true } : null;
@@ -69,6 +75,7 @@ export function telegramMessage(update) {
     { type: 'image', fileId: photo.file_id, name: 'image.jpg', size: photo.file_size } : null;
   if (typeof message.text !== 'string' && !media) return null;
   const quote = quotedMessage(message);
+  const approvalOtherId = otherApprovalId(message);
   return {
     channel: 'telegram',
     from_user_id: String(message.from.id),
@@ -80,6 +87,7 @@ export function telegramMessage(update) {
       ? { telegram_reply_to_message_id: message.reply_to_message.message_id } : {}),
     ...(message.reply_to_message?.from?.is_bot === true ? { telegram_reply_is_bot: true } : {}),
     ...(quote ? { quote } : {}),
+    ...(approvalOtherId ? { approval_other_id: approvalOtherId } : {}),
     ...(media ? { media } : {})
   };
 }
@@ -95,14 +103,14 @@ export function telegramActionCallback(update) {
 
 export function telegramApprovalCallback(update) {
   const query = update.callback_query;
-  const match = /^approval:(approve|deny|answer-[1-4]):([A-F0-9]{8})$/.exec(query?.data || '');
+  const match = /^approval:(approve|deny|other|answer-[1-4]):([A-F0-9]{8})$/.exec(query?.data || '');
   if (!match || query.message?.chat?.type !== 'private' ||
       query.from?.id !== query.message.chat.id || !Number.isInteger(query.message.message_id)) return null;
   return {
     channel: 'telegram', from_user_id: String(query.from.id),
     message_id: String(update.update_id), callback_id: query.id,
     telegram_message_id: query.message.message_id,
-    approval_id: match[2], text: match[1].startsWith('answer-')
+    approval_id: match[2], approval_other: match[1] === 'other', text: match[1].startsWith('answer-')
       ? `答 ${match[2]} ${match[1].slice(7)}`
       : `${match[1] === 'approve' ? '批准' : '拒绝'} ${match[2]}`
   };
@@ -150,6 +158,7 @@ export class TelegramTextClient {
         text: `${index + 1}. ${Array.from(label).slice(0, 42).join('')}`,
         callback_data: `approval:answer-${index + 1}:${approvalId}`
       }]),
+      [{ text: '其他（填写文字）', callback_data: `approval:other:${approvalId}` }],
       [{ text: '拒绝', callback_data: `approval:deny:${approvalId}` }]
     ];
     return [[
@@ -233,6 +242,14 @@ export class TelegramTextClient {
   ownsApprovalMessage(callback) {
     const sent = this.approvalMessages.get(callback.approval_id);
     return sent?.chatId === callback.from_user_id && sent.messageId === callback.telegram_message_id;
+  }
+
+  async promptOther(chatId, approvalId) {
+    await this.call('sendMessage', {
+      chat_id: chatId,
+      text: `请输入其他答案（审批 ${approvalId}）\n直接回复这条消息，最多 500 字。`,
+      reply_markup: { force_reply: true, input_field_placeholder: '输入其他答案' }
+    });
   }
 
   ownsActionMessage(callback) {

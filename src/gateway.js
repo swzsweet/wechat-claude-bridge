@@ -42,8 +42,16 @@ const telegram = telegramToken ? new TelegramTextClient({
   getOwnerId: () => core.telegramOwnerId,
   onCallback: (callback) => {
     if (callback.from_user_id !== core.telegramOwnerId) return '无权操作。';
-    if (callback.approval_id) return telegram.ownsApprovalMessage(callback)
-      ? core.incoming(callback) : '审批已处理或过期。';
+    if (callback.approval_id) {
+      if (!telegram.ownsApprovalMessage(callback)) return '审批已处理或过期。';
+      if (callback.approval_other) {
+        const pending = core.pending.get(callback.approval_id);
+        if (pending?.tool !== 'AskUserQuestion' || pending.expires <= Date.now()) return '审批已处理或过期。';
+        return telegram.promptOther(callback.from_user_id, callback.approval_id)
+          .then(() => '请回复新消息，输入其他答案。');
+      }
+      return core.incoming(callback);
+    }
     return telegram.ownsActionMessage(callback) ? core.action(callback) : '按钮已过期。';
   }
 }) : null;

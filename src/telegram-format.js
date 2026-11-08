@@ -19,7 +19,7 @@ export function formatTelegramApproval(title, id, tool, input) {
     const question = input.questions[0];
     const options = question.options.map((option, index) =>
       `${index + 1}. ${option.label}${option.description ? ` — ${option.description}` : ''}`).join('\n');
-    return `**${heading} 请求 ${id}**\n\n**${name}**\n\n${question.question}\n\n${options}\n\n请选择选项，或发送 拒绝 ${id}`;
+    return `**${heading} 请求 ${id}**\n\n**${name}**\n\n${question.question}\n\n${options}\n\n请选择选项、其他，或发送 拒绝 ${id}`;
   }
   if (tool === 'ExitPlanMode' && typeof input.plan === 'string') {
     const { plan, ...other } = input;

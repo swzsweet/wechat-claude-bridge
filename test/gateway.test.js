@@ -310,6 +310,27 @@ test('VS Code question buttons submit the selected answer, not a generic approva
   assert.equal(core.pending.has(id), false);
 });
 
+test('replying to the Telegram Other prompt submits free text only for the pending question', async () => {
+  const core = new GatewayCore({ telegramOwnerId: 'tg-owner', send: async () => {} });
+  const first = await core.requestLocalApproval('a', 'AskUserQuestion', restartQuestion);
+  const result = await core.incoming({ channel: 'telegram', from_user_id: 'tg-owner',
+    text: '稍后由我手动重启', approval_other_id: first.id });
+  assert.equal(result, '已提交答案。');
+  assert.deepEqual(await first.decision, { allow: true, answer: { other: '稍后由我手动重启' } });
+  assert.equal(await core.incoming({ channel: 'telegram', from_user_id: 'tg-owner',
+    text: '重复回答', approval_other_id: first.id }), '审批已处理或过期。');
+
+  const second = await core.requestLocalApproval('a', 'AskUserQuestion', restartQuestion);
+  await core.incoming({ channel: 'telegram', from_user_id: 'other',
+    text: '伪造回答', approval_other_id: second.id });
+  assert.equal(core.pending.has(second.id), true);
+  await core.incoming({ channel: 'telegram', from_user_id: 'tg-owner',
+    text: 'x'.repeat(501), approval_other_id: second.id });
+  assert.equal(core.pending.has(second.id), true);
+  core.cancelLocalApproval(second.id);
+  assert.deepEqual(await second.decision, { allow: false, reason: '本机审批已结束' });
+});
+
 test('worker question uses option buttons and refuses unsupported questions', async () => {
   const sent = [];
   const core = new GatewayCore({ ownerId: 'owner', send: async (text, options) => sent.push({ text, options }) });

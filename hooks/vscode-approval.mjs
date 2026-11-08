@@ -17,6 +17,12 @@ function questionAnswer(input, answer, validateOnly = false) {
       question.options.length < 2 || question.options.length > 4 ||
       question.options.some((option) => typeof option?.label !== 'string' || !option.label.trim())) return null;
   if (validateOnly) return {};
+  if (answer && typeof answer === 'object' && !Array.isArray(answer)) {
+    if (typeof answer.other !== 'string') return null;
+    const other = answer.other.trim();
+    if (!other || Array.from(other).length > 500) return null;
+    return { [question.question]: other };
+  }
   const choice = Number(answer);
   if (!Number.isInteger(choice) || choice < 1 || choice > question.options.length) return null;
   return { [question.question]: question.options[choice - 1].label };
